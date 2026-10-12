@@ -83,7 +83,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         // Status (only when something needs attention)
         var status: String?
         switch controller.captureState {
-        case .noSource: status = "Keine Quelle gewählt"
+        case .noSource: status = nil
         case .starting: status = "Verbinde mit Quelle …"
         case .running: status = controller.isRecording ? "● Aufnahme läuft" : nil
         case .unavailable(let why): status = "Quelle nicht verfügbar – \(why)"
@@ -94,8 +94,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if status != nil || controller.lastMessage != nil { menu.addItem(.separator()) }
 
         // Recording
-        let rec = item(controller.isRecording ? "Aufnahme stoppen" : "Aufnahme starten", #selector(toggleRecording), key: "r")
-        rec.image = NSImage(systemSymbolName: controller.isRecording ? "stop.circle" : "record.circle", accessibilityDescription: nil)
+        let noSource = settings.source == nil && !controller.isRecording
+        let recTitle = controller.isRecording ? "Aufnahme stoppen" : noSource ? "Keine Input-Quelle ausgewählt" : "Aufnahme starten"
+        let rec = item(recTitle, #selector(toggleRecording), key: noSource ? "" : "r")
+        rec.image = NSImage(systemSymbolName: controller.isRecording ? "stop.circle" : noSource ? "video.slash" : "record.circle",
+                            accessibilityDescription: nil)
         rec.isEnabled = controller.isRecording || controller.captureState == .running
         menu.addItem(rec)
         menu.addItem(.separator())

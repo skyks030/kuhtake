@@ -42,6 +42,10 @@ scripts/release.sh 1.1.0 "Was ist neu"
 
 Das Skript setzt `VERSION`, baut die App, erstellt `Kuhtake-1.1.0-macOS.zip` (für den Updater) und `Kuhtake-1.1.0.dmg`, taggt `v1.1.0` und legt das GitHub-Release an. Alle installierten Kuhtake-Apps bieten das Update beim nächsten Start an.
 
+## Website
+
+Die Landingpage liegt in [`website/`](website) (Next.js). In Vercel das Repo importieren und als Root Directory `website` wählen.
+
 ## Aufbau
 
 | Datei | Aufgabe |
