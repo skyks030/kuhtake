@@ -18,7 +18,10 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
         if resizable { style.insert(.resizable) }
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: style, backing: .buffered, defer: false)
         window.title = title
-        window.contentViewController = NSHostingController(rootView: content())
+        let hosting = NSHostingController(rootView: content())
+        // Don't let SwiftUI resize the window on every content update (live preview).
+        hosting.sizingOptions = resizable ? [.minSize] : [.preferredContentSize]
+        window.contentViewController = hosting
         window.setContentSize(size)
         window.isReleasedWhenClosed = false
         window.delegate = self

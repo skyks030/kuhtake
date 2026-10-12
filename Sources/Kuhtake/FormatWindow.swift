@@ -34,7 +34,7 @@ struct FormatView: View {
                 if !settings.codec.isProRes {
                     LabeledContent("Datenrate") {
                         HStack {
-                            Slider(value: $settings.bitrateMbps, in: 2...100, step: 1)
+                            Slider(value: Binding(get: { settings.bitrateMbps }, set: { settings.bitrateMbps = $0.rounded() }), in: 2...100)
                             Text("\(Int(settings.bitrateMbps)) Mbit/s").monospacedDigit().frame(width: 80, alignment: .trailing)
                         }
                     }

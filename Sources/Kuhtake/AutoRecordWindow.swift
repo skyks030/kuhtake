@@ -4,7 +4,8 @@ import SwiftUI
 
 enum AutoRecordWindow {
     static func show() {
-        WindowPresenter.shared.show(id: "auto", title: "Auto-Aufnahme einrichten", size: CGSize(width: 900, height: 720), resizable: true) {
+        WindowPresenter.shared.show(id: "auto", title: "Auto-Aufnahme einrichten", size: CGSize(width: 900, height: 720), resizable: true,
+                                   onClose: { AppController.shared.autoTriggerSuspended = false }) {
             AutoRecordView()
         }
     }
@@ -59,7 +60,7 @@ struct AutoRecordView: View {
                     }
                 } else {
                     VStack(spacing: 8) {
-                        Image(systemName: "video.slash").font(.largeTitle)
+                        Image(nsImage: CowArt.illustration(size: 96)).opacity(0.9)
                         Text("Keine aktive Quelle. Bitte zuerst über „Quelle wählen …“ ein Fenster oder einen Bildschirm auswählen.")
                             .multilineTextAlignment(.center)
                         Button("Quelle wählen …") { SourcePickerWindow.show() }
@@ -96,13 +97,13 @@ struct AutoRecordView: View {
                     ChangeMeter(score: detector.score, threshold: detector.currentThreshold, active: detector.isActive)
                     LabeledContent("Start-Verzögerung") {
                         HStack {
-                            Slider(value: $settings.startDelay, in: 0...3, step: 0.1)
+                            Slider(value: rounded($settings.startDelay), in: 0...3)
                             Text(String(format: "%.1f s", settings.startDelay)).monospacedDigit().frame(width: 44)
                         }
                     }
                     LabeledContent("Stopp-Verzögerung") {
                         HStack {
-                            Slider(value: $settings.stopDelay, in: 0...10, step: 0.1)
+                            Slider(value: rounded($settings.stopDelay), in: 0...10)
                             Text(String(format: "%.1f s", settings.stopDelay)).monospacedDigit().frame(width: 44)
                         }
                     }
@@ -117,7 +118,7 @@ struct AutoRecordView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("Den Ruhezustand übernehmen, während die Kamera NICHT aufnimmt. Eine Stopp-Verzögerung von 1–2 s überbrückt blinkende REC-Anzeigen.")
+                    Text("Den Ruhezustand übernehmen, während die Kamera NICHT aufnimmt. Eine Stopp-Verzögerung von 1–2 s überbrückt blinkende REC-Anzeigen. Solange dieses Fenster offen ist, wird nicht automatisch aufgenommen – die Anzeige zeigt nur, ob ausgelöst würde.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -125,8 +126,19 @@ struct AutoRecordView: View {
             .frame(height: 380)
         }
         .frame(minWidth: 640, minHeight: 640)
-        .onAppear { preview.start() }
-        .onDisappear { preview.stop() }
+        .onAppear {
+            controller.autoTriggerSuspended = true
+            preview.start()
+        }
+        .onDisappear {
+            controller.autoTriggerSuspended = false
+            preview.stop()
+        }
+    }
+
+    /// Continuous slider (no tick marks) that stores tenths of a second.
+    private func rounded(_ b: Binding<Double>) -> Binding<Double> {
+        Binding(get: { b.wrappedValue }, set: { b.wrappedValue = ($0 * 10).rounded() / 10 })
     }
 }
 
@@ -138,14 +150,16 @@ private struct ChangeMeter: View {
     var body: some View {
         LabeledContent("Veränderung") {
             HStack {
+                // Scaled to the threshold: the marker in the middle is the trigger point.
                 GeometryReader { geo in
+                    let level = threshold > 0 ? min(score / threshold, 2) / 2 : 0
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.gray.opacity(0.2))
                         Capsule().fill(score >= threshold ? Color.red : Color.green)
-                            .frame(width: max(4, geo.size.width * min(score, 1)))
+                            .frame(width: max(4, geo.size.width * level))
                         Rectangle().fill(Color.primary)
                             .frame(width: 2)
-                            .offset(x: geo.size.width * min(threshold, 1) - 1)
+                            .offset(x: geo.size.width / 2 - 1)
                     }
                 }
                 .frame(height: 10)

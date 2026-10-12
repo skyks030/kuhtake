@@ -22,7 +22,7 @@ struct PermissionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                Image(systemName: "record.circle").font(.system(size: 40)).foregroundStyle(.red)
+                Image(nsImage: CowArt.illustration(size: 64))
                 VStack(alignment: .leading) {
                     Text("Kuhtake").font(.title.bold())
                     Text("Live-Feed abfilmen und Takes automatisch ablegen").foregroundStyle(.secondary)

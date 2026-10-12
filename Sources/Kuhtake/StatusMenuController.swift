@@ -30,12 +30,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private func updateIcon() {
         guard let button = statusItem.button else { return }
         if controller.isRecording {
-            let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-                .applying(.init(paletteColors: [.white, .systemRed]))
-            let image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Aufnahme läuft")?
-                .withSymbolConfiguration(config)
-            image?.isTemplate = false
-            button.image = image
+            button.image = CowArt.menuBarImage(recording: true)
             button.attributedTitle = NSAttributedString(string: " REC", attributes: [
                 .foregroundColor: NSColor.systemRed,
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .heavy),
@@ -43,16 +38,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             startBlink()
         } else {
             stopBlink()
-            let symbol: String
-            switch controller.captureState {
-            case .running: symbol = "record.circle"
-            case .starting: symbol = "circle.dotted"
-            case .noSource, .unavailable, .noPermission: symbol = "video.slash"
-            }
-            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Kuhtake")?
-                .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-            image?.isTemplate = true
-            button.image = image
+            button.image = CowArt.menuBarImage(recording: false, dimmed: controller.captureState != .running)
             button.attributedTitle = NSAttributedString(string: settings.autoRecordEnabled ? " AUTO" : "", attributes: [
                 .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             ])
@@ -94,25 +80,24 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // Status
-        let status: String
+        // Status (only when something needs attention)
+        var status: String?
         switch controller.captureState {
         case .noSource: status = "Keine Quelle gewählt"
         case .starting: status = "Verbinde mit Quelle …"
-        case .running: status = controller.isRecording ? "● Aufnahme läuft" : "Bereit – Vorschau aktiv"
+        case .running: status = controller.isRecording ? "● Aufnahme läuft" : nil
         case .unavailable(let why): status = "Quelle nicht verfügbar – \(why)"
         case .noPermission: status = "Bildschirmaufnahme-Berechtigung fehlt"
         }
-        menu.addItem(disabled(status))
+        if let status { menu.addItem(disabled(status)) }
         if let msg = controller.lastMessage { menu.addItem(disabled(msg)) }
-        menu.addItem(.separator())
+        if status != nil || controller.lastMessage != nil { menu.addItem(.separator()) }
 
         // Recording
         let rec = item(controller.isRecording ? "Aufnahme stoppen" : "Aufnahme starten", #selector(toggleRecording), key: "r")
         rec.image = NSImage(systemSymbolName: controller.isRecording ? "stop.circle" : "record.circle", accessibilityDescription: nil)
         rec.isEnabled = controller.isRecording || controller.captureState == .running
         menu.addItem(rec)
-        menu.addItem(disabled("⌘-Klick aufs Icon oder ⌃⌥⌘R startet/stoppt"))
         menu.addItem(.separator())
 
         // Source
@@ -125,17 +110,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Auto recording
-        let auto = item("Auto-Aufnahme aktiv", #selector(toggleAuto))
-        auto.state = settings.autoRecordEnabled ? .on : .off
-        menu.addItem(auto)
+        menu.addItem(toggle("Auto-Aufnahme", settings.autoRecordEnabled) { [weak self] on in
+            self?.controller.setAutoRecord(on)
+        })
         menu.addItem(item("Auto-Aufnahme einrichten …", #selector(configureAuto), image: "viewfinder"))
         menu.addItem(.separator())
 
         // Naming
         menu.addItem(disabled("Nächster Clip: \(ClipNaming.next.baseFileName)"))
-        let prompt = item("Benennung nach jedem Clip abfragen", #selector(toggleNamingPrompt))
-        prompt.state = settings.showNamingPrompt ? .on : .off
-        menu.addItem(prompt)
+        menu.addItem(toggle("Benennung nach jedem Clip abfragen", settings.showNamingPrompt) { [weak self] on in
+            self?.settings.showNamingPrompt = on
+        })
         menu.addItem(item("Szene / Shot / Take festlegen …", #selector(editNaming), image: "number"))
         menu.addItem(.separator())
 
@@ -144,15 +129,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(item("Arbeitsordner wählen …", #selector(chooseFolder), image: "folder"))
         menu.addItem(item("Arbeitsordner im Finder zeigen", #selector(revealFolder)))
         menu.addItem(item("Dateiformat …", #selector(showFormat), image: "film"))
-        let audio = item("Ton der Quelle mit aufnehmen", #selector(toggleAudio))
-        audio.state = settings.recordAudio ? .on : .off
-        menu.addItem(audio)
+        menu.addItem(toggle("Ton der Quelle mit aufnehmen", settings.recordAudio) { [weak self] on in
+            self?.settings.recordAudio = on
+        })
         menu.addItem(.separator())
 
         // App
-        let login = item("Beim Anmelden starten", #selector(toggleLaunchAtLogin))
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(login)
+        menu.addItem(toggle("Beim Anmelden starten", SMAppService.mainApp.status == .enabled) { [weak self] on in
+            self?.setLaunchAtLogin(on)
+        })
         menu.addItem(item("Nach Updates suchen …", #selector(checkUpdates)))
         menu.addItem(disabled("Version \(Updater.currentVersion)"))
         menu.addItem(item("Kuhtake beenden", #selector(quit), key: "q"))
@@ -163,6 +148,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
         i.target = self
         if let image { i.image = NSImage(systemSymbolName: image, accessibilityDescription: nil) }
+        return i
+    }
+
+    private func toggle(_ title: String, _ isOn: Bool, onChange: @escaping (Bool) -> Void) -> NSMenuItem {
+        let i = NSMenuItem()
+        i.view = MenuSwitchRow(title: title, isOn: isOn, onChange: onChange)
         return i
     }
 
@@ -181,12 +172,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func toggleRecording() { controller.toggleRecording() }
     @objc private func chooseSource() { SourcePickerWindow.show() }
     @objc private func showPermissions() { PermissionsWindow.show() }
-    @objc private func toggleAuto() { controller.setAutoRecord(!settings.autoRecordEnabled) }
     @objc private func configureAuto() { AutoRecordWindow.show() }
-    @objc private func toggleNamingPrompt() { settings.showNamingPrompt.toggle() }
     @objc private func editNaming() { NamingPanelController.shared.editNext() }
     @objc private func showFormat() { FormatWindow.show() }
-    @objc private func toggleAudio() { settings.recordAudio.toggle() }
     @objc private func checkUpdates() { Updater.shared.check(userInitiated: true) }
     @objc private func quit() {
         if controller.isRecording {
@@ -216,9 +204,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         NSWorkspace.shared.open(settings.workingFolder)
     }
 
-    @objc private func toggleLaunchAtLogin() {
+    private func setLaunchAtLogin(_ on: Bool) {
         do {
-            if SMAppService.mainApp.status == .enabled {
+            if !on {
                 try SMAppService.mainApp.unregister()
             } else {
                 try SMAppService.mainApp.register()
@@ -226,5 +214,49 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         } catch {
             controller.notify("Autostart konnte nicht geändert werden: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Menu row with a switch. Clicking it toggles without closing the menu.
+private final class MenuSwitchRow: NSView {
+    private let toggle = NSSwitch()
+    private let label: NSTextField
+    private let onChange: (Bool) -> Void
+
+    init(title: String, isOn: Bool, onChange: @escaping (Bool) -> Void) {
+        self.onChange = onChange
+        label = NSTextField(labelWithString: title)
+        super.init(frame: NSRect(x: 0, y: 0, width: 290, height: 28))
+        autoresizingMask = [.width]
+
+        label.font = NSFont.menuFont(ofSize: 0)
+        label.textColor = .labelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        toggle.controlSize = .mini
+        toggle.state = isOn ? .on : .off
+        toggle.target = self
+        toggle.action = #selector(switched)
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        addSubview(toggle)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            toggle.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 16),
+            toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func switched() {
+        onChange(toggle.state == .on)
+    }
+
+    /// Clicking the label toggles too.
+    override func mouseUp(with event: NSEvent) {
+        toggle.state = toggle.state == .on ? .off : .on
+        switched()
     }
 }

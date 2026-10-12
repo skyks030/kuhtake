@@ -32,9 +32,10 @@ final class MotionDetector: ObservableObject {
         refreshParams()
     }
 
-    /// Thresholds derived from the sensitivity slider.
+    /// Thresholds derived from the sensitivity slider. Exponential, so the sensitive end stays finely adjustable:
+    /// s = 0 → 30 % color change on half the region, s = 1 → 2 % color change on under 1 % of the region.
     static func thresholds(sensitivity s: Double) -> (colorTolerance: Float, changedFraction: Double) {
-        (Float(0.30 - 0.22 * s), 0.50 - 0.47 * s)
+        (Float(0.30 * pow(0.02 / 0.30, s)), 0.50 * pow(0.0075 / 0.50, s))
     }
 
     var currentThreshold: Double { Self.thresholds(sensitivity: settings.sensitivity).changedFraction }

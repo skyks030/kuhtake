@@ -11,7 +11,8 @@ APP=build/Kuhtake.app
 if [ ! -f Resources/AppIcon.icns ]; then
   echo "→ Generating icon"
   TMP=$(mktemp -d)
-  swift scripts/make-icon.swift "$TMP/icon.png"
+  swiftc -o "$TMP/make-icon" scripts/icon/main.swift Sources/Kuhtake/CowArt.swift
+  "$TMP/make-icon" "$TMP/icon.png"
   ICONSET="$TMP/AppIcon.iconset"; mkdir "$ICONSET"
   for s in 16 32 128 256 512; do
     sips -z $s $s "$TMP/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null

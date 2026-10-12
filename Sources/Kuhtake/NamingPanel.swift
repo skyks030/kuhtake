@@ -93,7 +93,10 @@ struct NamingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(info).font(.callout).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Image(nsImage: CowArt.illustration(size: 36))
+                Text(info).font(.callout).foregroundStyle(.secondary)
+            }
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
                 GridRow {

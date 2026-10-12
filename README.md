@@ -7,8 +7,8 @@ macOS-Menüleisten-App fürs Filmset: filmt den Live-Feed eines Fensters (z. B. 
 - **Lebt nur in der Menüleiste** – kein Dock-Icon.
 - **Quelle wählen**: Fenster oder Bildschirme mit Vorschaubild. Die gewählte Quelle wird dauerhaft im Hintergrund mitgeschnitten (Vorschau), aber erst bei „Aufnahme“ gespeichert. Wird das Fenster geschlossen (z. B. Viewer neu gestartet), verbindet sich Kuhtake automatisch wieder.
 - **Aufnahme starten/stoppen**: im Menü, per **⌘-Klick** (oder ⌥-Klick) auf das Menüleisten-Symbol oder global mit **⌃⌥⌘R**.
-- **Rotes REC-Symbol** in der Menüleiste, solange aufgenommen wird.
-- **Auto-Aufnahme**: In der Live-Vorschau ein Rechteck oder einen Kreis (z. B. über die REC-Anzeige der Kamera) ziehen und skalieren. Weicht der Bereich deutlich vom gespeicherten Ruhezustand ab, startet die Aufnahme; kehrt er zurück, stoppt sie. Mit Regler für die Empfindlichkeit, Start-/Stopp-Verzögerung (gegen blinkende Anzeigen) und Live-Pegel.
+- **Kuh in der Menüleiste**: im Ruhezustand eine kleine Kuh, während der Aufnahme eine rote, pulsierende Kuh mit „REC“.
+- **Auto-Aufnahme**: In der Live-Vorschau ein Rechteck oder einen Kreis (z. B. über die REC-Anzeige der Kamera) ziehen und skalieren. Weicht der Bereich deutlich vom gespeicherten Ruhezustand ab, startet die Aufnahme; kehrt er zurück, stoppt sie. Mit fein einstellbarem Regler für die Empfindlichkeit, Start-/Stopp-Verzögerung (gegen blinkende Anzeigen) und Live-Pegel.
 - **Benennung**: Nach jedem Clip erscheint (abschaltbar) ein Dialog für Szene (frei), Shot und Take (zweistellig). Der Take zählt automatisch hoch; wird Shot oder Szene geändert, beginnt der Take wieder bei 01. Ist der Dialog aus, wird automatisch weitergezählt.
   Ablage: `<Arbeitsordner>/SC<Szene>/SC<Szene>_SH<Shot>_TK<Take>.mov`
 - **Dateiformat**: H.264, HEVC, ProRes 422 Proxy/LT/422/HQ · MOV oder MP4 · native Auflösung oder 720p/1080p/2160p mit schwarzen Balken · 23.976–60 fps · Datenrate. Dateien haben eine konstante Bildrate.
@@ -53,3 +53,4 @@ Das Skript setzt `VERSION`, baut die App, erstellt `Kuhtake-1.1.0-macOS.zip` (f�
 | `StatusMenuController.swift` | Menüleisten-Symbol und Menü |
 | `ClipNaming.swift`, `NamingPanel.swift` | Szene/Shot/Take-Logik und Dialog |
 | `Updater.swift` | GitHub-Release-Check und Selbst-Update |
+| `CowArt.swift` | Die Kuh: App-Icon, Menüleisten-Symbol, Illustrationen |

@@ -24,6 +24,8 @@ final class AppController: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var restartWork: DispatchWorkItem?
     private var captureTask: Task<Void, Never>?
+    /// True while the auto-record setup window is open, so adjusting the region doesn't start takes.
+    var autoTriggerSuspended = false
 
     private init() {
         engine.onUnexpectedStop = { [weak self] error in self?.handleStreamLoss(error) }
@@ -197,13 +199,13 @@ final class AppController: ObservableObject {
     // MARK: Auto recording
 
     private func handleAutoTrigger(_ active: Bool) {
-        guard settings.autoRecordEnabled, captureState == .running else { return }
+        guard settings.autoRecordEnabled, !autoTriggerSuspended, captureState == .running else { return }
         if active { startRecording() } else { stopRecording() }
     }
 
     func setAutoRecord(_ enabled: Bool) {
         settings.autoRecordEnabled = enabled
-        if enabled, detector.isActive, !isRecording { startRecording() }
+        if enabled, !autoTriggerSuspended, detector.isActive, !isRecording { startRecording() }
     }
 
     // MARK: Messages
