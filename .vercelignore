@@ -1,0 +1,10 @@
+# Only the website is deployed – skip the Swift app and build output.
+/*
+!/app
+!/components
+!/lib
+!/public
+!/package.json
+!/package-lock.json
+!/next.config.ts
+!/tsconfig.json
