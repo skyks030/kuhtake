@@ -5,3 +5,10 @@ dist/
 *.xcodeproj
 xcuserdata/
 .DS_Store
+node_modules/
+.next/
+out/
+.vercel/
+next-env.d.ts
+*.tsbuildinfo
+.env*.local

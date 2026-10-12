@@ -5,15 +5,16 @@ Kleine Landingpage (Next.js, Node.js) mit Infos und Download-Button. Der Button 
 ## Lokal
 
 ```bash
-cd website
 npm install
 npm run dev     # http://localhost:3000
 ```
 
 ## Auf Vercel
 
-1. In Vercel *Add New → Project* → Repository `skyks030/kuhtake` importieren.
-2. **Root Directory** auf `website` setzen (Framework „Next.js“ wird erkannt).
+1. In Vercel *Add New → Project* → Repository `skyks030/kuhtake` importieren (Branch `main`).
+2. Alles auf Standard lassen – Next.js wird im Repo-Hauptverzeichnis erkannt.
 3. Deploy. Keine Umgebungsvariablen nötig.
+
+Die Website-Dateien (`app/`, `components/`, `lib/`, `public/`, `package.json`, `next.config.ts`) liegen bewusst im Hauptverzeichnis neben dem Swift-Paket, damit Vercel ohne Root-Directory-Einstellung baut.
 
 Das App-Icon (`public/kuhtake-icon.png`, `app/icon.png`) wird aus `Sources/Kuhtake/CowArt.swift` erzeugt.

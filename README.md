@@ -44,7 +44,7 @@ Das Skript setzt `VERSION`, baut die App, erstellt `Kuhtake-1.1.0-macOS.zip` (f�
 
 ## Website
 
-Die Landingpage liegt in [`website/`](website) (Next.js). In Vercel das Repo importieren und als Root Directory `website` wählen.
+Die Landingpage (Next.js) liegt im Hauptverzeichnis (`app/`, `components/`, `lib/`, `public/`). In Vercel einfach das Repo mit Branch `main` importieren – siehe [WEBSITE.md](WEBSITE.md).
 
 ## Aufbau
 
