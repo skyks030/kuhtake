@@ -382,14 +382,20 @@ private struct NamingSettingsView: View {
                 Text("Ist die Abfrage aus, zählt der Take automatisch weiter.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Nächster Clip") {
-                TextField("Szene", text: $settings.scene)
-                Stepper(value: $settings.shot, in: 1...99) {
-                    LabeledContent("Shot", value: ClipName.twoDigits(settings.shot))
+            Section {
+                labelField("Szene", text: $settings.sceneLabel, example: "12A")
+                labelField("Shot", text: $settings.shotLabel, example: "03")
+                labelField("Take", text: $settings.takeLabel, example: "07")
+                LabeledContent("Beispiel") {
+                    Text(ClipNaming.previewPath(for: ClipName(scene: "12A", shot: 3, take: 7)))
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
                 }
-                Stepper(value: $settings.take, in: 1...999) {
-                    LabeledContent("Take", value: ClipName.twoDigits(settings.take))
-                }
+            } header: {
+                Text("Bezeichnungen")
+            } footer: {
+                Text("Steht vor der Szene, dem Shot und dem Take im Ordner- und Dateinamen. Der Source Browser findet und sortiert alle Clips, die diese Bezeichnungen tragen – jeweils gefolgt von einer ein- bis dreistelligen Zahl (z. B. SH3, SH03, SH003). Leer lassen für reine Zahlen. Den nächsten Clip stellst du im Hauptfenster oben rechts ein.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Namensschema") {
                 NamingSchemeEditor(template: $template, example: ClipNaming.next)
@@ -406,6 +412,22 @@ private struct NamingSettingsView: View {
         .frame(width: 560)
         .onReceive(settings.$namingTemplate) { t in
             if NamingScheme.validate(template) == nil || t == template { template = t }
+        }
+    }
+
+    private func labelField(_ title: String, text: Binding<String>, example: String) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                TextField(title, text: Binding(get: { text.wrappedValue },
+                                               set: { text.wrappedValue = NamingScheme.Labels.clean($0) }))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .labelsHidden()
+                    .frame(width: 90)
+                Text("→ \(text.wrappedValue)\(example)")
+                    .font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary)
+                    .frame(width: 90, alignment: .leading)
+            }
         }
     }
 }

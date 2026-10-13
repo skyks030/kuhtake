@@ -21,14 +21,39 @@ struct ClipName: Equatable {
 
 // MARK: - Naming scheme
 
-/// A user-defined path template such as `SC{szene}/SC{szene}_SH{shot}_TK{take}`: `/` separates folders,
-/// the last part is the file name (without extension). The same template names new clips and recognises
-/// existing files in the working folder – so an older folder structure is found by describing its names.
+/// A user-defined path template such as `{szene}/{szene}_{shot}_{take}`: `/` separates folders, the last part is
+/// the file name (without extension). Each placeholder is written with its label (`Labels`, e.g. SC / SH / TK):
+/// `{szene}` → `SC12A`, `{shot}` → `SH03`, `{take}` → `TK07`. The same template and labels name new clips and
+/// recognise existing files in the working folder – so an older folder structure is found by describing its names.
 ///
 /// Placeholders (case-insensitive): `{szene}` / `{scene}`, `{shot}` / `{einstellung}`, `{take}`, `{datum}` / `{date}`
-/// (YYMMDD). Numbers can get a width: `{take:3}` → `007`.
+/// (YYMMDD, without label). Numbers can get a width: `{take:3}` → `TK007`.
 struct NamingScheme: Equatable {
-    static let defaultTemplate = "SC{szene}/SC{szene}_SH{shot}_TK{take}"
+    static let defaultTemplate = "{szene}/{szene}_{shot}_{take}"
+
+    /// What precedes scene, shot and take in names ("SC12A_SH03_TK07"); may be empty.
+    struct Labels: Equatable {
+        var scene: String
+        var shot: String
+        var take: String
+
+        static let standard = Labels(scene: "SC", shot: "SH", take: "TK")
+
+        func label(for field: Field) -> String {
+            switch field {
+            case .scene: return scene
+            case .shot: return shot
+            case .take: return take
+            case .date: return ""
+            }
+        }
+
+        /// Only characters that work in file names and don't clash with the template syntax.
+        static func clean(_ s: String) -> String {
+            let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|{}").union(.newlines).union(.controlCharacters)
+            return s.components(separatedBy: forbidden).joined().trimmingCharacters(in: .whitespaces)
+        }
+    }
     static let videoExtensions = ["mov", "mp4", "m4v"]
 
     struct Preset: Identifiable {
@@ -39,10 +64,11 @@ struct NamingScheme: Equatable {
 
     static let presets: [Preset] = [
         Preset(title: "Kuhtake-Standard", template: defaultTemplate),
-        Preset(title: "Ordner je Szene und Shot", template: "SC{szene}/SH{shot}/SC{szene}_SH{shot}_TK{take}"),
-        Preset(title: "Szene-Shot-Take, ein Ordner", template: "{szene}-{shot}-{take}"),
-        Preset(title: "S/E/T mit Datum", template: "{datum}/S{szene}_E{shot}_T{take:3}"),
-        Preset(title: "Szene_Take (ohne Shot)", template: "{szene}/{szene}_T{take}"),
+        Preset(title: "Ordner je Szene und Shot", template: "{szene}/{shot}/{szene}_{shot}_{take}"),
+        Preset(title: "Alles in einem Ordner", template: "{szene}_{shot}_{take}"),
+        Preset(title: "Mit Bindestrichen", template: "{szene}/{szene}-{shot}-{take}"),
+        Preset(title: "Tagesordner, Take dreistellig", template: "{datum}/{szene}_{shot}_{take:3}"),
+        Preset(title: "Ohne Shot", template: "{szene}/{szene}_{take}"),
     ]
 
     enum Field: String { case scene, shot, take, date }
@@ -68,12 +94,13 @@ struct NamingScheme: Equatable {
     }
 
     let template: String
+    let labels: Labels
     /// One token list per path component; the last one is the file name.
     let components: [[Token]]
 
     var hasShot: Bool { components.contains { $0.contains { if case .field(.shot, _) = $0 { return true }; return false } } }
 
-    init(template: String) throws {
+    init(template: String, labels: Labels = ClipNaming.labels) throws {
         let trimmed = template.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ParseError.empty }
         var comps: [[Token]] = []
@@ -88,11 +115,12 @@ struct NamingScheme: Equatable {
             throw ParseError.missingScene
         }
         self.template = trimmed
+        self.labels = labels
         components = comps
     }
 
-    static func validate(_ template: String) -> ParseError? {
-        do { _ = try NamingScheme(template: template); return nil } catch { return error as? ParseError ?? .empty }
+    static func validate(_ template: String, labels: Labels = ClipNaming.labels) -> ParseError? {
+        do { _ = try NamingScheme(template: template, labels: labels); return nil } catch { return error as? ParseError ?? .empty }
     }
 
     private static func tokenize(_ s: String) throws -> [Token] {
@@ -144,9 +172,9 @@ struct NamingScheme: Equatable {
             comp.map { token -> String in
                 switch token {
                 case .literal(let s): return s
-                case .field(.scene, _): return ClipName.sanitize(name.scene)
-                case .field(.shot, let w): return Self.pad(name.shot, w)
-                case .field(.take, let w): return Self.pad(name.take, w)
+                case .field(.scene, _): return labels.scene + ClipName.sanitize(name.scene)
+                case .field(.shot, let w): return labels.shot + Self.pad(name.shot, w)
+                case .field(.take, let w): return labels.take + Self.pad(name.take, w)
                 case .field(.date, _): return Self.dateFormatter.string(from: date)
                 }
             }.joined()
@@ -174,8 +202,8 @@ struct NamingScheme: Equatable {
         let groups: [Field]
     }
 
-    private var fullPattern: Pattern { Self.pattern(for: components) }
-    private var filePattern: Pattern { Self.pattern(for: [components.last!]) }
+    private var fullPattern: Pattern { Self.pattern(for: components, labels: labels) }
+    private var filePattern: Pattern { Self.pattern(for: [components.last!], labels: labels) }
 
     /// Compiled once per scheme (the index calls `match` for every file).
     final class Matcher {
@@ -195,7 +223,7 @@ struct NamingScheme: Equatable {
         return apply(matcher.file, to: fileName)
     }
 
-    private static func pattern(for comps: [[Token]]) -> Pattern {
+    private static func pattern(for comps: [[Token]], labels: Labels) -> Pattern {
         var groups: [Field] = []
         var parts: [String] = []
         for comp in comps {
@@ -205,13 +233,14 @@ struct NamingScheme: Equatable {
                 case .literal(let lit):
                     s += NSRegularExpression.escapedPattern(for: lit)
                 case .field(let f, let w):
-                    // Two numbers right after each other only separate with a fixed width.
-                    let next = i + 1 < comp.count ? comp[i + 1] : nil
+                    s += NSRegularExpression.escapedPattern(for: labels.label(for: f))
+                    // Two numbers right after each other (no label between) only separate with a fixed width.
                     let fixed: Bool
-                    if case .field = next { fixed = true } else { fixed = false }
+                    if i + 1 < comp.count, case .field(let nf, _) = comp[i + 1], labels.label(for: nf).isEmpty { fixed = true } else { fixed = false }
                     switch f {
                     case .scene: s += "([^/]+?)"
-                    case .shot, .take: s += fixed && w > 0 ? "(\\d{\(w)})" : "(\\d+)"
+                    // Shot and take: one to three digits (more only if the template asks for a wider number).
+                    case .shot, .take: s += fixed && w > 0 ? "(\\d{\(w)})" : "(\\d{1,\(max(3, w))})"
                     case .date: s += "(\\d{6})"
                     }
                     groups.append(f)
@@ -256,6 +285,11 @@ struct NamingScheme: Equatable {
 // MARK: - Files on disk
 
 enum ClipNaming {
+    static var labels: NamingScheme.Labels {
+        let s = AppSettings.shared
+        return NamingScheme.Labels(scene: s.sceneLabel, shot: s.shotLabel, take: s.takeLabel)
+    }
+
     static var next: ClipName {
         let s = AppSettings.shared
         return ClipName(scene: s.scene, shot: s.shot, take: s.take)

@@ -332,13 +332,16 @@ private struct SceneRow: View {
 
 private struct ShotRow: View {
     let shot: ShotGroup
+
+    /// "SH03" – the shot label from the naming settings.
+    private var shotTitle: String {
+        let l = ClipNaming.labels.shot
+        return (l.isEmpty ? "Shot " : l) + ClipName.twoDigits(shot.shot)
+    }
     var body: some View {
         HStack {
             Label {
-                HStack(spacing: 6) {
-                    Text("Einstellung \(ClipName.twoDigits(shot.shot))")
-                    Text("SH\(ClipName.twoDigits(shot.shot))").font(.caption.monospaced()).foregroundStyle(.secondary)
-                }
+                Text(shotTitle).font(.body.monospaced())
             } icon: {
                 Image(systemName: "camera.fill").foregroundStyle(.secondary)
             }

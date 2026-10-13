@@ -27,6 +27,13 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
 
     var isRunning: Bool { stream != nil }
 
+    // ScreenCaptureKit only delivers a picture when the content changes – a still window sends nothing at all.
+    // So the last picture is repeated at the frame rate while nothing new comes (video queue only).
+    private var repeater: DispatchSourceTimer?
+    private var lastFrame: CVPixelBuffer?
+    private var lastFramePTS: CMTime = .invalid
+    private var lastFrameAt: TimeInterval = 0
+
     // Kept for changing the picture area while the stream runs.
     private var filter: SCContentFilter?
     private struct Params { var frameRate: FrameRateOption; var captureAudio: Bool; var showCursor: Bool }
@@ -59,6 +66,7 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
             try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
         }
         try await s.startCapture()
+        startRepeater(interval: frameRate.frameDuration.seconds)
         stream = s
         self.filter = filter
     }
@@ -111,8 +119,35 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         return cfg
     }
 
+    private func startRepeater(interval: TimeInterval) {
+        stopRepeater()
+        let t = DispatchSource.makeTimerSource(queue: videoQueue)
+        t.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(2))
+        t.setEventHandler { [weak self] in self?.repeatIfIdle(interval: interval) }
+        t.resume()
+        repeater = t
+    }
+
+    private func stopRepeater() {
+        repeater?.cancel()
+        repeater = nil
+        videoQueue.async { [weak self] in
+            self?.lastFrame = nil
+            self?.lastFramePTS = .invalid
+        }
+    }
+
+    private func repeatIfIdle(interval: TimeInterval) {
+        guard let pb = lastFrame, lastFramePTS.isValid else { return }
+        let elapsed = ProcessInfo.processInfo.systemUptime - lastFrameAt
+        guard elapsed >= interval * 1.5 else { return }
+        // Same clock as the real pictures: continue from the last one.
+        hub.pushVideo(pb, pts: CMTimeAdd(lastFramePTS, CMTime(seconds: elapsed, preferredTimescale: 1_000_000_000)))
+    }
+
     @MainActor
     func stop() async {
+        stopRepeater()
         guard let s = stream else { return }
         stream = nil
         filter = nil
@@ -171,6 +206,9 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
                 SCFrameStatus(rawValue: rawStatus) == .complete,
                 let pb = sampleBuffer.imageBuffer
             else { return }
+            lastFrame = pb
+            lastFramePTS = sampleBuffer.presentationTimeStamp
+            lastFrameAt = ProcessInfo.processInfo.systemUptime
             hub.pushVideo(pb, pts: sampleBuffer.presentationTimeStamp)
         case .audio:
             hub.pushAudio(sampleBuffer)
@@ -184,6 +222,7 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.stream === stream else { return }
+            self.stopRepeater()
             self.stream = nil
             self.filter = nil
             self.hub.reset()

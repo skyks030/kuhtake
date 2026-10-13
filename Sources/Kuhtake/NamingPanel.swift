@@ -171,6 +171,7 @@ struct NamingView: View {
 struct NamingSchemeEditor: View {
     @Binding var template: String
     let example: ClipName
+    @ObservedObject private var settings = AppSettings.shared
 
     @State private var matches: Int?
     @State private var activeMatches: Int?
@@ -211,11 +212,11 @@ struct NamingSchemeEditor: View {
                     + Text(ClipNaming.previewPath(for: example, scheme: scheme)).font(.caption.monospaced())
                 matchInfo
             }
-            Text("„/“ trennt Ordner, der letzte Teil ist der Dateiname. {take:3} schreibt den Take dreistellig (007). Kuhtake erkennt im Arbeitsordner alle Dateien, die zu diesem Schema passen – passt die Ordnerstruktur nicht, reicht ein passender Dateiname mit Szene und Take.")
+            Text("„/“ trennt Ordner, der letzte Teil ist der Dateiname. Jeder Platzhalter wird mit seiner Bezeichnung geschrieben ({szene} → \(settings.sceneLabel)12A, {shot} → \(settings.shotLabel)03, {take} → \(settings.takeLabel)07; ändern unter Einstellungen → Benennung). {take:3} schreibt den Take dreistellig. Kuhtake erkennt im Arbeitsordner alle Dateien, die zu diesem Schema passen – passt die Ordnerstruktur nicht, reicht ein passender Dateiname mit Szene und Take.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .task(id: template) { await countMatches() }
+        .task(id: "\(template)|\(settings.sceneLabel)|\(settings.shotLabel)|\(settings.takeLabel)") { await countMatches() }
     }
 
     @ViewBuilder

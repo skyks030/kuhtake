@@ -207,28 +207,31 @@ private struct PreviewTopBar: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
+        // Left and right take the same share of the width, so the mode switch always sits in the window's middle.
         HStack(spacing: 12) {
-            Image(systemName: sourceIcon).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("INPUT-QUELLE").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
-                Text(settings.source?.label ?? "Keine Quelle gewählt")
-                    .font(.callout.weight(.semibold)).lineLimit(1)
-                HStack(spacing: 6) {
-                    Circle().fill(stateColor).frame(width: 7, height: 7)
-                    Text(stateText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 12) {
+                Image(systemName: sourceIcon).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("INPUT-QUELLE").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                    Text(settings.source?.label ?? "Keine Quelle gewählt")
+                        .font(.callout.weight(.semibold)).lineLimit(1)
+                    HStack(spacing: 6) {
+                        Circle().fill(stateColor).frame(width: 7, height: 7)
+                        Text(stateText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
+                .layoutPriority(-1)
+                Menu {
+                    SourceMenuItems()
+                } label: {
+                    Image(systemName: "chevron.down.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Quelle wechseln")
             }
-            Menu {
-                SourceMenuItems()
-            } label: {
-                Image(systemName: "chevron.down.circle")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Quelle wechseln")
-
-            Spacer(minLength: 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Picker("", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
                 Text("Source Browser").tag(PreviewModel.Mode.browser)
@@ -239,16 +242,20 @@ private struct PreviewTopBar: View {
             .fixedSize()
             .help("Source Browser (\(shortcutText(.sourceBrowser))) · Live-Bild (\(shortcutText(.liveView)))")
 
-            Spacer(minLength: 12)
-
-            if settings.autoRecordEnabled {
-                Text("AUTO").font(.caption.weight(.heavy)).foregroundStyle(.orange)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().strokeBorder(Color.orange.opacity(0.7)))
-                    .help("Auto-Aufnahme ist aktiv")
+            HStack(spacing: 12) {
+                if settings.autoRecordEnabled {
+                    Text("AUTO").font(.caption.weight(.heavy)).foregroundStyle(.orange)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().strokeBorder(Color.orange.opacity(0.7)))
+                        .help("Auto-Aufnahme ist aktiv")
+                        .fixedSize()
+                }
+                NextClipButton()
+                    .layoutPriority(-1)
+                RecordButton()
+                    .fixedSize()
             }
-            NextClipButton()
-            RecordButton()
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 14)
         .frame(height: 54)
@@ -304,6 +311,8 @@ private struct NextClipButton: View {
                 HStack(spacing: 4) {
                     Text(ClipNaming.nextFileName)
                         .font(.system(.caption, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Image(systemName: "pencil").font(.caption2)
                 }
                 .foregroundStyle(.secondary)

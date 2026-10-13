@@ -163,6 +163,10 @@ final class AppSettings: ObservableObject {
 
     /// Folder / file name template, see `NamingScheme`.
     @Published var namingTemplate: String { didSet { d.set(namingTemplate, forKey: "namingTemplate") } }
+    /// Labels written before scene, shot and take ("SC12A_SH03_TK07").
+    @Published var sceneLabel: String { didSet { d.set(sceneLabel, forKey: "sceneLabel") } }
+    @Published var shotLabel: String { didSet { d.set(shotLabel, forKey: "shotLabel") } }
+    @Published var takeLabel: String { didSet { d.set(takeLabel, forKey: "takeLabel") } }
 
     /// Read the camera's timecode from the picture (OCR).
     @Published var timecodeEnabled: Bool { didSet { d.set(timecodeEnabled, forKey: "timecodeEnabled") } }
@@ -202,7 +206,10 @@ final class AppSettings: ObservableObject {
         stopDelay = d.object(forKey: "stopDelay") as? Double ?? 1.5
         baseline = Self.load("baseline")
         vuerCrop = Self.load("vuerCrop")
-        namingTemplate = d.string(forKey: "namingTemplate") ?? NamingScheme.defaultTemplate
+        namingTemplate = Self.migrateTemplate(d.string(forKey: "namingTemplate"), hasLabels: d.string(forKey: "sceneLabel") != nil)
+        sceneLabel = d.string(forKey: "sceneLabel") ?? NamingScheme.Labels.standard.scene
+        shotLabel = d.string(forKey: "shotLabel") ?? NamingScheme.Labels.standard.shot
+        takeLabel = d.string(forKey: "takeLabel") ?? NamingScheme.Labels.standard.take
         timecodeEnabled = d.object(forKey: "timecodeEnabled") as? Bool ?? true
         timecodeRegion = Self.load("timecodeRegion") ?? CGRect(x: 0.38, y: 0.9, width: 0.24, height: 0.06)
         scene = d.string(forKey: "scene") ?? "1"
@@ -211,6 +218,24 @@ final class AppSettings: ObservableObject {
         skippedVersion = d.string(forKey: "skippedVersion")
         shortcuts = Self.load("shortcuts") ?? [:]
         browserLastTakesOnly = d.bool(forKey: "browserLastTakesOnly")
+        // Store the migrated state once, so the migration never runs again.
+        d.set(namingTemplate, forKey: "namingTemplate")
+        d.set(sceneLabel, forKey: "sceneLabel")
+        d.set(shotLabel, forKey: "shotLabel")
+        d.set(takeLabel, forKey: "takeLabel")
+    }
+
+    /// Until 1.2.1 the labels were part of the template ("SC{szene}_SH{shot}_TK{take}"); now each placeholder
+    /// carries its label, so "SC"/"SH"/"TK" right before a placeholder are removed once.
+    private static func migrateTemplate(_ stored: String?, hasLabels: Bool) -> String {
+        guard let stored else { return NamingScheme.defaultTemplate }
+        guard !hasLabels else { return stored }
+        var t = stored
+        for (label, names) in [("SC", "szene|scene|sc"), ("SH", "shot|einstellung|sh"), ("TK", "take|tk")] {
+            t = t.replacingOccurrences(of: "\(label)(\\{(?:\(names))(?::\\d+)?\\})", with: "$1",
+                                       options: [.regularExpression, .caseInsensitive])
+        }
+        return t
     }
 
     func shortcut(for action: ShortcutAction) -> ShortcutBinding {

@@ -14,7 +14,10 @@ struct TakeFile: Identifiable, Hashable {
     let date: Date
     let size: Int64
 
-    var label: String { "TK\(ClipName.twoDigits(take))" + (variant > 1 ? " (\(variant))" : "") }
+    var label: String {
+        let l = ClipNaming.labels.take
+        return (l.isEmpty ? "Take " : l) + ClipName.twoDigits(take) + (variant > 1 ? " (\(variant))" : "")
+    }
     var name: String { url.deletingPathExtension().lastPathComponent }
     var clipName: ClipName { ClipName(scene: scene, shot: shot, take: take) }
 
@@ -74,7 +77,9 @@ final class ClipIndex: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] url in self?.watch(url) }
         // A different naming scheme recognises different files.
-        schemeCancellable = AppSettings.shared.$namingTemplate
+        let st = AppSettings.shared
+        schemeCancellable = Publishers.CombineLatest4(st.$namingTemplate, st.$sceneLabel, st.$shotLabel, st.$takeLabel)
+            .map { "\($0)|\($1)|\($2)|\($3)" }
             .removeDuplicates()
             .dropFirst()
             .receive(on: DispatchQueue.main)
