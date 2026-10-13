@@ -8,10 +8,19 @@ struct SourceBrowserView: View {
     @ObservedObject private var model = PreviewModel.shared
     @ObservedObject private var index = ClipIndex.shared
 
+    /// Width of the take list, remembered between launches (dragged at the divider).
+    @AppStorage("browserSidebarWidth") private var sidebarWidth: Double = Self.defaultSidebarWidth
+    @State private var dragStartWidth: Double?
+
+    /// Just wide enough for the key hints at the bottom.
+    static let defaultSidebarWidth: Double = 270
+    static let sidebarRange: ClosedRange<Double> = 220...560
+
     var body: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             TakeSidebar()
-                .frame(minWidth: 230, idealWidth: 290, maxWidth: 440)
+                .frame(width: min(max(sidebarWidth, Self.sidebarRange.lowerBound), Self.sidebarRange.upperBound))
+            divider
             HStack(spacing: 1) {
                 MonitorView(monitor: model.monitor1, number: 1, isLatest: isLatest(model.monitor1))
                 if model.showSecondMonitor {
@@ -25,6 +34,29 @@ struct SourceBrowserView: View {
             .frame(minWidth: 420)
             .animation(.easeInOut(duration: 0.2), value: model.showSecondMonitor)
         }
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(width: 1)
+            .overlay(
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { v in
+                            let start = dragStartWidth ?? sidebarWidth
+                            dragStartWidth = start
+                            sidebarWidth = min(max(start + v.translation.width, Self.sidebarRange.lowerBound), Self.sidebarRange.upperBound)
+                        }
+                        .onEnded { _ in dragStartWidth = nil })
+                    .onTapGesture(count: 2) { sidebarWidth = Self.defaultSidebarWidth }
+                    .help("Ziehen ändert die Breite · Doppelklick: Standardbreite")
+            )
     }
 
     private func isLatest(_ m: MonitorPlayer) -> Bool {
@@ -74,6 +106,7 @@ private struct TakeSidebar: View {
                     }
                     .listStyle(.sidebar)
                     .onDeleteCommand { model.deleteRequest = model.selectedTake }
+                    .help("Takes auf eine Einstellung oder Szene ziehen, um sie zu verschieben · ⌫ legt den Take in den Papierkorb")
                     .onChange(of: model.selection) { _, id in
                         guard let id else { return }
                         reveal(id)
@@ -141,8 +174,7 @@ private struct TakeSidebar: View {
             KeyHint(key: "1", text: "Monitor 1")
             KeyHint(key: "2", text: "Monitor 2")
             KeyHint(key: "␣", text: "Play")
-            Spacer()
-            Text("Takes auf Shot/Szene ziehen zum Verschieben").font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .frame(height: 30)

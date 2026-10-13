@@ -210,6 +210,7 @@ private struct PreviewTopBar: View {
         HStack(spacing: 12) {
             Image(systemName: sourceIcon).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
+                Text("INPUT-QUELLE").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
                 Text(settings.source?.label ?? "Keine Quelle gewählt")
                     .font(.callout.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 6) {
@@ -246,14 +247,11 @@ private struct PreviewTopBar: View {
                     .background(Capsule().strokeBorder(Color.orange.opacity(0.7)))
                     .help("Auto-Aufnahme ist aktiv")
             }
-            Text(ClipNaming.nextFileName)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .help("Name des nächsten Clips")
+            NextClipButton()
             RecordButton()
         }
         .padding(.horizontal, 14)
-        .frame(height: 50)
+        .frame(height: 54)
     }
 
     private var sourceIcon: String {
@@ -289,6 +287,81 @@ private struct PreviewTopBar: View {
         case .unavailable(let why): return why
         case .noPermission: return "Bildschirmaufnahme-Berechtigung fehlt"
         }
+    }
+}
+
+/// Name of the next clip; click to set scene, shot and take right there.
+private struct NextClipButton: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @State private var editing = false
+
+    var body: some View {
+        Button {
+            editing.toggle()
+        } label: {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("NÄCHSTER CLIP").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    Text(ClipNaming.nextFileName)
+                        .font(.system(.caption, design: .monospaced))
+                    Image(systemName: "pencil").font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 6).fill(editing ? Color.primary.opacity(0.08) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Szene, Shot und Take des nächsten Clips ändern (\(shortcutText(.nameNextClip)))")
+        .popover(isPresented: $editing, arrowEdge: .bottom) { NextClipEditor() }
+    }
+}
+
+/// Edits the counter for the next clip directly (same values as „Szene / Shot / Take festlegen …“).
+private struct NextClipEditor: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @FocusState private var sceneFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Nächster Clip").font(.headline)
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                GridRow {
+                    Text("Szene").gridColumnAlignment(.trailing)
+                    TextField("z. B. 12A", text: Binding(get: { settings.scene }, set: { new in
+                        if new != settings.scene { settings.take = 1 }
+                        settings.scene = new
+                    }))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 120)
+                    .focused($sceneFocused)
+                }
+                GridRow {
+                    Text("Shot")
+                    Stepper(value: Binding(get: { settings.shot }, set: { settings.shot = $0; settings.take = 1 }), in: 1...99) {
+                        Text(ClipName.twoDigits(settings.shot)).font(.body.monospacedDigit()).frame(width: 34, alignment: .leading)
+                    }
+                    .disabled(!ClipNaming.scheme.hasShot)
+                }
+                GridRow {
+                    Text("Take")
+                    Stepper(value: $settings.take, in: 1...999) {
+                        Text(ClipName.twoDigits(settings.take)).font(.body.monospacedDigit()).frame(width: 34, alignment: .leading)
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "doc").foregroundStyle(.secondary)
+                Text(ClipNaming.previewPath(for: ClipNaming.next))
+                    .font(.caption.monospaced()).textSelection(.enabled)
+            }
+            Button("Namensschema …") { SettingsWindow.show(tab: .naming) }
+                .buttonStyle(.link).font(.caption)
+        }
+        .padding(16)
+        .frame(minWidth: 280)
+        .onAppear { sceneFocused = true }
     }
 }
 

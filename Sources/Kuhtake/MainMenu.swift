@@ -90,7 +90,7 @@ enum MainMenu {
 
     /// Menu item for a shortcut action, showing its current shortcut.
     static func action(_ a: ShortcutAction) -> NSMenuItem {
-        let item = NSMenuItem(title: a.title, action: #selector(MenuTarget.perform(_:)), keyEquivalent: "")
+        let item = NSMenuItem(title: a.title, action: #selector(MenuTarget.runAction(_:)), keyEquivalent: "")
         item.target = target
         item.representedObject = a.rawValue
         applyShortcut(of: a, to: item)
@@ -114,7 +114,8 @@ enum MainMenu {
 }
 
 private final class MenuTarget: NSObject, NSMenuItemValidation {
-    @MainActor @objc func perform(_ sender: NSMenuItem) {
+    // Not `perform(_:)`: that name is NSObject's `performSelector:`, and the menu would call that instead.
+    @MainActor @objc func runAction(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let a = ShortcutAction(rawValue: raw) else { return }
         a.perform()
     }

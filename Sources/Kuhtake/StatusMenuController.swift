@@ -8,6 +8,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let controller = AppController.shared
     private let settings = AppSettings.shared
     private var cancellables = Set<AnyCancellable>()
+    private var clickMonitor: Any?
     private var blinkTimer: Timer?
 
     override init() {
@@ -16,6 +17,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             button.target = self
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+            // ⌘-click on a status item normally starts the system's "rearrange menu bar" drag before the button
+            // ever sees it, so it is caught here first: ⌘-click (and ⌥-click) on the cow toggles the recording.
+            clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self, let button = self.statusItem.button, event.window === button.window,
+                      !event.modifierFlags.intersection([.command, .option]).isEmpty else { return event }
+                self.controller.toggleRecording()
+                return nil
+            }
             button.imagePosition = .imageLeading
         }
         Publishers.CombineLatest3(controller.$isRecording, controller.$captureState, settings.$autoRecordEnabled)
@@ -63,7 +72,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     // MARK: Click handling
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
-        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
         if flags.contains(.command) || flags.contains(.option) {
             controller.toggleRecording()
             return
