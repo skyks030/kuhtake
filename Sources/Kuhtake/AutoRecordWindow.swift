@@ -32,7 +32,7 @@ final class LivePreviewModel: ObservableObject {
     }
 
     private func refresh() {
-        guard let pb = AppController.shared.engine.latestPixelBuffer else { return }
+        guard let pb = AppController.shared.hub.latestPixelBuffer else { return }
         var img = CIImage(cvPixelBuffer: pb)
         let maxWidth: CGFloat = 1280
         if img.extent.width > maxWidth {
@@ -178,6 +178,7 @@ struct RegionEditor: View {
     @Binding var region: CGRect
     let shape: RegionShape
     let highlight: Bool
+    var activeColor: Color = .red
     let onCommit: () -> Void
 
     @State private var dragStart: CGRect?
@@ -190,7 +191,7 @@ struct RegionEditor: View {
             let fit = Self.aspectFit(imgSize, in: geo.size)
             let r = CGRect(x: fit.minX + region.minX * fit.width, y: fit.minY + region.minY * fit.height,
                            width: region.width * fit.width, height: region.height * fit.height)
-            let color: Color = highlight ? .red : .yellow
+            let color: Color = highlight ? activeColor : .yellow
 
             ZStack(alignment: .topLeading) {
                 if let image {

@@ -4,10 +4,6 @@ import SwiftUI
 
 enum SourcePickerWindow {
     static func show() {
-        guard CGPreflightScreenCaptureAccess() else {
-            PermissionsWindow.show()
-            return
-        }
         WindowPresenter.shared.show(id: "source", title: "Quelle wählen", size: CGSize(width: 820, height: 600), resizable: true) {
             SourcePickerView()
         }
@@ -92,12 +88,14 @@ final class SourcePickerModel: ObservableObject {
 struct SourcePickerView: View {
     @StateObject private var model = SourcePickerModel()
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var directory = DeckLinkDirectory.shared
+    private let hasScreenPermission = CGPreflightScreenCaptureAccess()
     private let columns = [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 16)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Welches Fenster oder welcher Bildschirm soll abgefilmt werden?")
+                Text("Welche Quelle soll aufgenommen werden?")
                     .font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.small) }
@@ -111,7 +109,18 @@ struct SourcePickerView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if let error = model.error {
+                    deckLinkSection
+                    VuerPickerSection(columns: columns)
+                    if !hasScreenPermission {
+                        HStack {
+                            Label("Für Bildschirme und Fenster braucht Kuhtake die Bildschirmaufnahme-Berechtigung.", systemImage: "lock.shield")
+                            Spacer()
+                            Button("Einrichten …") { PermissionsWindow.show() }
+                        }
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
+                    }
+                    if let error = model.error, hasScreenPermission {
                         Text(error).foregroundStyle(.red)
                     }
                     section("Bildschirme", model.displays)
@@ -121,7 +130,28 @@ struct SourcePickerView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 400)
-        .task { await model.load() }
+        .task { if hasScreenPermission { await model.load() } }
+    }
+
+    @ViewBuilder
+    private var deckLinkSection: some View {
+        Text("Blackmagic DeckLink / UltraStudio").font(.title3.bold())
+        if !directory.driverAvailable {
+            Text("Blackmagic Desktop Video ist nicht installiert – ohne den Treiber sind keine Hardware-Eingänge verfügbar.")
+                .foregroundStyle(.secondary)
+        } else if directory.devices.isEmpty {
+            Text("Kein Gerät angeschlossen. Sobald eins angesteckt wird, erscheint es hier.")
+                .foregroundStyle(.secondary)
+        } else {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                ForEach(directory.devices) { d in
+                    DeckLinkTile(device: d, selected: settings.source?.kind == .decklink && settings.source?.deckLinkID == d.id) {
+                        AppController.shared.select(source: .deckLink(d))
+                        WindowPresenter.shared.close(id: "source")
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -140,8 +170,45 @@ struct SourcePickerView: View {
     }
 
     private func isSelected(_ c: SourceCandidate) -> Bool {
-        guard let s = settings.source else { return false }
-        return s.kind == c.source.kind && s.windowID == c.source.windowID && s.displayID == c.source.displayID
+        settings.source?.isSame(as: c.source) ?? false
+    }
+}
+
+private struct DeckLinkTile: View {
+    let device: DeckLinkDevice
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.85))
+                    if selected {
+                        LiveVideoView().clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        Image(systemName: "cable.connector.horizontal")
+                            .font(.system(size: 38, weight: .light))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                .frame(height: 140)
+                HStack(spacing: 8) {
+                    Image(systemName: "video.fill").frame(width: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(device.name).font(.callout.weight(.medium)).lineLimit(1)
+                        Text("Hardware-Eingang · DeckLink SDK").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(hovering ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.08)))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -187,5 +254,67 @@ private struct SourceTile: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+/// Teradek: the VUER app window as a source, plus the encoders VUER would see on the network.
+private struct VuerPickerSection: View {
+    let columns: [GridItem]
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var browser = TeradekBrowser.shared
+    @State private var hovering = false
+
+    var body: some View {
+        let app = VuerApp.hdr
+        let selected = settings.source?.kind == .vuer
+        Text("Teradek Serv Pro / VUER").font(.title3.bold())
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+            Button {
+                AppController.shared.select(source: .vuer(app))
+                if !app.isRunning { app.launch() }
+                WindowPresenter.shared.close(id: "source")
+            } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.85))
+                        if selected {
+                            LiveVideoView().clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.system(size: 38, weight: .light))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
+                    .frame(height: 140)
+                    HStack(spacing: 8) {
+                        Image(systemName: "video.fill").frame(width: 20)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(app.name).font(.callout.weight(.medium)).lineLimit(1)
+                            Text(!app.isInstalled ? "Nicht installiert – öffnet den App Store" : app.isRunning ? "App-Fenster · Videobereich automatisch" : "Wird beim Auswählen gestartet")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 12).fill(hovering ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+        }
+        HStack(spacing: 6) {
+            if browser.encoders.isEmpty {
+                if browser.isSearching { ProgressView().controlSize(.mini) }
+                Text("Kein Teradek-Encoder im Netzwerk gefunden – Serv Pro und Mac müssen im selben Netz sein.")
+            } else {
+                Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(.green)
+                Text("Im Netzwerk: " + browser.encoders.map { e in
+                    e.host.map { "\(e.name) (\($0.hasSuffix(".") ? String($0.dropLast()) : $0))" } ?? e.name
+                }.joined(separator: ", "))
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .onAppear { browser.start() }
     }
 }

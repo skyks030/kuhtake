@@ -35,7 +35,7 @@ final class NamingPanelController {
     }
 
     private func present(title: String, info: String, saveLabel: String, discard: (() -> Void)?, save: @escaping (ClipName) -> Void) {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 500, height: 280),
                             styleMask: [.titled, .utilityWindow], backing: .buffered, defer: false)
         panel.title = title
         panel.level = .floating
@@ -75,7 +75,9 @@ struct NamingView: View {
     @State private var scene: String
     @State private var shot: Int
     @State private var take: Int
+    @State private var template = AppSettings.shared.namingTemplate
     @State private var confirmDiscard = false
+    @AppStorage("namingSchemeExpanded") private var schemeExpanded = false
     @FocusState private var sceneFocused: Bool
 
     init(initial: ClipName, info: String, saveLabel: String, onSave: @escaping (ClipName) -> Void, onDiscard: (() -> Void)?) {
@@ -90,6 +92,7 @@ struct NamingView: View {
     }
 
     private var name: ClipName { ClipName(scene: scene.trimmingCharacters(in: .whitespaces), shot: shot, take: take) }
+    private var scheme: NamingScheme? { try? NamingScheme(template: template) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -113,6 +116,7 @@ struct NamingView: View {
                     Text("Shot")
                     TwoDigitField(value: $shot)
                         .onChange(of: shot) { _, _ in take = 1 }
+                        .disabled(scheme?.hasShot == false)
                 }
                 GridRow {
                     Text("Take")
@@ -122,9 +126,20 @@ struct NamingView: View {
 
             HStack {
                 Image(systemName: "doc").foregroundStyle(.secondary)
-                Text("\(name.sceneFolderName)/\(name.baseFileName).\(AppSettings.shared.effectiveContainer.fileExtension)")
+                Text(scheme.map { ClipNaming.previewPath(for: name, scheme: $0) } ?? "–")
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
+                    .lineLimit(2)
+            }
+
+            DisclosureGroup(isExpanded: $schemeExpanded) {
+                NamingSchemeEditor(template: $template, example: name)
+                    .padding(.top, 6)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Namensschema")
+                    Text(template).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
 
             HStack {
@@ -135,14 +150,110 @@ struct NamingView: View {
                         }
                 }
                 Spacer()
-                Button(saveLabel) { onSave(name) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(name.scene.isEmpty)
+                Button(saveLabel) {
+                    if scheme != nil, template != AppSettings.shared.namingTemplate {
+                        AppSettings.shared.namingTemplate = template.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    onSave(name)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(name.scene.isEmpty || scheme == nil)
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 500)
         .onAppear { sceneFocused = true }
+    }
+}
+
+/// Edits the folder / file name template. Shows what the next clip would be called and how many files in the
+/// working folder the template recognises – so an existing folder structure can be described until it's found.
+struct NamingSchemeEditor: View {
+    @Binding var template: String
+    let example: ClipName
+
+    @State private var matches: Int?
+    @State private var activeMatches: Int?
+
+    private var error: NamingScheme.ParseError? { NamingScheme.validate(template) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                TextField("Schema", text: $template)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                Menu {
+                    ForEach(NamingScheme.presets) { p in
+                        Button("\(p.title)   \(p.template)") { template = p.template }
+                    }
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                }
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Vorlage wählen")
+            }
+            HStack(spacing: 6) {
+                Text("Einfügen:").font(.caption).foregroundStyle(.secondary)
+                tokenButton("Szene", "{szene}")
+                tokenButton("Shot", "{shot}")
+                tokenButton("Take", "{take}")
+                tokenButton("Datum", "{datum}")
+                tokenButton("Ordner /", "/")
+                Spacer()
+            }
+            if let error {
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if let scheme = try? NamingScheme(template: template) {
+                Text("Nächster Clip: ") .font(.caption).foregroundStyle(.secondary)
+                    + Text(ClipNaming.previewPath(for: example, scheme: scheme)).font(.caption.monospaced())
+                matchInfo
+            }
+            Text("„/“ trennt Ordner, der letzte Teil ist der Dateiname. {take:3} schreibt den Take dreistellig (007). Kuhtake erkennt im Arbeitsordner alle Dateien, die zu diesem Schema passen – passt die Ordnerstruktur nicht, reicht ein passender Dateiname mit Szene und Take.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .task(id: template) { await countMatches() }
+    }
+
+    @ViewBuilder
+    private var matchInfo: some View {
+        if let matches {
+            let current = activeMatches ?? ClipIndex.shared.scenes.reduce(0) { $0 + $1.takeCount }
+            HStack(spacing: 4) {
+                Image(systemName: matches > 0 ? "checkmark.circle.fill" : "questionmark.circle")
+                    .foregroundStyle(matches > 0 ? .green : .secondary)
+                Text(matches == 1 ? "1 vorhandener Take im Arbeitsordner erkannt" : "\(matches) vorhandene Takes im Arbeitsordner erkannt")
+                if template.trimmingCharacters(in: .whitespacesAndNewlines) != AppSettings.shared.namingTemplate {
+                    Text("(bisher \(current))").foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+        } else {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("Arbeitsordner wird durchsucht …").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func tokenButton(_ title: String, _ token: String) -> some View {
+        Button(title) { template += token }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+    }
+
+    private func countMatches() async {
+        matches = nil
+        guard let scheme = try? NamingScheme(template: template) else { return }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard !Task.isCancelled else { return }
+        let folder = AppSettings.shared.workingFolder
+        let count = await Task.detached(priority: .userInitiated) { ClipIndex.countMatches(in: folder, scheme: scheme) }.value
+        guard !Task.isCancelled else { return }
+        matches = count
     }
 }
 

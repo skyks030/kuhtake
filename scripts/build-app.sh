@@ -36,6 +36,6 @@ sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist >
 IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | grep -m1 'Apple Development' | sed -E 's/.*"(.*)"/\1/' || true)}"
 IDENTITY="${IDENTITY:--}"
 echo "→ Signing with: $IDENTITY"
-codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$APP"
+codesign --force --options runtime --timestamp=none --entitlements Resources/Kuhtake.entitlements --sign "$IDENTITY" "$APP"
 codesign --verify --strict "$APP"
 echo "✓ $APP ($VERSION, build $BUILD)"

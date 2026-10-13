@@ -96,17 +96,43 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         // Recording
         let noSource = settings.source == nil && !controller.isRecording
         let recTitle = controller.isRecording ? "Aufnahme stoppen" : noSource ? "Keine Input-Quelle ausgewählt" : "Aufnahme starten"
-        let rec = item(recTitle, #selector(toggleRecording), key: noSource ? "" : "r")
+        let rec = item(recTitle, #selector(toggleRecording))
+        if !noSource { MainMenu.applyShortcut(of: .toggleRecording, to: rec) }
         rec.image = NSImage(systemSymbolName: controller.isRecording ? "stop.circle" : noSource ? "video.slash" : "record.circle",
                             accessibilityDescription: nil)
         rec.isEnabled = controller.isRecording || controller.captureState == .running
         menu.addItem(rec)
         menu.addItem(.separator())
 
+        // Preview
+        menu.addItem(shortcutItem("Vorschau öffnen", .showPreview, #selector(showPreview), image: "rectangle.inset.filled"))
+        menu.addItem(shortcutItem("Source Browser", .sourceBrowser, #selector(showBrowser), image: "rectangle.split.3x1"))
+        menu.addItem(.separator())
+
         // Source
         let sourceLabel = settings.source?.label ?? "–"
         menu.addItem(disabled("Quelle: \(sourceLabel)"))
-        menu.addItem(item("Quelle wählen …", #selector(chooseSource), image: "macwindow.on.rectangle"))
+        let directory = DeckLinkDirectory.shared
+        if !directory.devices.isEmpty {
+            let deckLinkMenu = NSMenu()
+            for d in directory.devices {
+                let i = NSMenuItem(title: d.name, action: #selector(chooseDeckLink(_:)), keyEquivalent: "")
+                i.target = self
+                i.representedObject = d.id
+                i.state = settings.source?.kind == .decklink && settings.source?.deckLinkID == d.id ? .on : .off
+                deckLinkMenu.addItem(i)
+            }
+            let sub = item("Blackmagic-Eingang", #selector(noop), image: "cable.connector.horizontal")
+            sub.submenu = deckLinkMenu
+            menu.addItem(sub)
+        }
+        let vuer = item("Teradek Vuer HDR", #selector(chooseVuer), image: "antenna.radiowaves.left.and.right")
+        vuer.state = settings.source?.kind == .vuer ? .on : .off
+        menu.addItem(vuer)
+        menu.addItem(shortcutItem("Fenster oder Bildschirm wählen …", .chooseSource, #selector(chooseSource), image: "macwindow.on.rectangle"))
+        if settings.source?.isScreenCapture == true {
+            menu.addItem(item("Bildausschnitt festlegen …", #selector(configureCrop), image: "crop"))
+        }
         if case .noPermission = controller.captureState {
             menu.addItem(item("Berechtigungen einrichten …", #selector(showPermissions), image: "lock.shield"))
         }
@@ -119,12 +145,23 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(item("Auto-Aufnahme einrichten …", #selector(configureAuto), image: "viewfinder"))
         menu.addItem(.separator())
 
+        // Timecode
+        let tcFrames = controller.timecode.currentFrames()
+        menu.addItem(disabled("Timecode: " + (settings.timecodeEnabled
+            ? TimecodeReader.format(frames: tcFrames ?? 0, quanta: controller.timecode.quanta) + (tcFrames == nil ? " (nicht erkannt)" : "")
+            : "aus")))
+        menu.addItem(toggle("Timecode aus dem Bild lesen", settings.timecodeEnabled) { [weak self] on in
+            self?.settings.timecodeEnabled = on
+        })
+        menu.addItem(item("Timecode-Bereich festlegen …", #selector(configureTimecode), image: "clock"))
+        menu.addItem(.separator())
+
         // Naming
-        menu.addItem(disabled("Nächster Clip: \(ClipNaming.next.baseFileName)"))
+        menu.addItem(disabled("Nächster Clip: \(ClipNaming.nextFileName)"))
         menu.addItem(toggle("Benennung nach jedem Clip abfragen", settings.showNamingPrompt) { [weak self] on in
             self?.settings.showNamingPrompt = on
         })
-        menu.addItem(item("Szene / Shot / Take festlegen …", #selector(editNaming), image: "number"))
+        menu.addItem(shortcutItem("Szene / Shot / Take festlegen …", .nameNextClip, #selector(editNaming), image: "number"))
         menu.addItem(.separator())
 
         // Output
@@ -141,6 +178,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(toggle("Beim Anmelden starten", SMAppService.mainApp.status == .enabled) { [weak self] on in
             self?.setLaunchAtLogin(on)
         })
+        menu.addItem(item("Einstellungen …", #selector(showSettings), key: ",", image: "gearshape"))
         menu.addItem(item("Nach Updates suchen …", #selector(checkUpdates)))
         menu.addItem(disabled("Version \(Updater.currentVersion)"))
         menu.addItem(item("Kuhtake beenden", #selector(quit), key: "q"))
@@ -151,6 +189,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
         i.target = self
         if let image { i.image = NSImage(systemSymbolName: image, accessibilityDescription: nil) }
+        return i
+    }
+
+    private func shortcutItem(_ title: String, _ action: ShortcutAction, _ selector: Selector, image: String? = nil) -> NSMenuItem {
+        let i = item(title, selector, image: image)
+        MainMenu.applyShortcut(of: action, to: i)
         return i
     }
 
@@ -174,33 +218,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     @objc private func toggleRecording() { controller.toggleRecording() }
     @objc private func chooseSource() { SourcePickerWindow.show() }
+    @objc private func noop() {}
+    @MainActor @objc private func showPreview() { PreviewWindow.show() }
+    @MainActor @objc private func showBrowser() { PreviewWindow.show(mode: .browser) }
+    @MainActor @objc private func showSettings() { SettingsWindow.show() }
+    @objc private func chooseDeckLink(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let d = DeckLinkDirectory.shared.devices.first(where: { $0.id == id }) else { return }
+        controller.select(source: .deckLink(d))
+    }
     @objc private func showPermissions() { PermissionsWindow.show() }
     @objc private func configureAuto() { AutoRecordWindow.show() }
+    @objc private func configureTimecode() { TimecodeWindow.show() }
+    @objc private func configureCrop() { CropWindow.show() }
+    @objc private func chooseVuer() { controller.select(source: .vuer()) }
     @objc private func editNaming() { NamingPanelController.shared.editNext() }
     @objc private func showFormat() { FormatWindow.show() }
     @objc private func checkUpdates() { Updater.shared.check(userInitiated: true) }
-    @objc private func quit() {
-        if controller.isRecording {
-            controller.stopRecording()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NSApp.terminate(nil) }
-        } else {
-            NSApp.terminate(nil)
-        }
-    }
-
-    @objc private func chooseFolder() {
-        NSApp.activate(ignoringOtherApps: true)
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Als Arbeitsordner wählen"
-        panel.directoryURL = settings.workingFolder
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.workingFolder = url
-        }
-    }
+    @objc private func quit() { controller.quitSafely() }
+    @objc private func chooseFolder() { WorkingFolder.choose() }
 
     @objc private func revealFolder() {
         try? FileManager.default.createDirectory(at: settings.workingFolder, withIntermediateDirectories: true)

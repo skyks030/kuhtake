@@ -4,17 +4,15 @@ import ScreenCaptureKit
 
 enum CaptureError: LocalizedError {
     case sourceNotFound(String)
+    case vuerNotRunning(String)
+    case vuerNoWindow(String)
     var errorDescription: String? {
         switch self {
         case .sourceNotFound(let s): return "Quelle „\(s)“ ist derzeit nicht verfügbar."
+        case .vuerNotRunning(let app): return "\(app) läuft nicht – Kuhtake verbindet sich, sobald die App gestartet ist"
+        case .vuerNoWindow(let app): return "\(app) zeigt kein Fenster – bitte das Vuer-Fenster öffnen"
         }
     }
-}
-
-/// Receives video/audio samples while a recording is running.
-protocol CaptureSink: AnyObject {
-    func appendVideo(_ pixelBuffer: CVPixelBuffer, pts: CMTime)
-    func appendAudio(_ sampleBuffer: CMSampleBuffer)
 }
 
 /// Keeps a ScreenCaptureKit stream of the selected window/display running in the background.
@@ -22,23 +20,24 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
     private let videoQueue = DispatchQueue(label: "kuhtake.capture.video", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "kuhtake.capture.audio", qos: .userInteractive)
-    private let lock = NSLock()
-    private var _latest: CVPixelBuffer?
-    private weak var _sink: CaptureSink?
+    private let hub: FrameHub
 
     /// Called on the main queue when the stream stops unexpectedly (window closed, etc.).
     var onUnexpectedStop: ((Error) -> Void)?
 
     var isRunning: Bool { stream != nil }
 
-    var latestPixelBuffer: CVPixelBuffer? {
-        lock.lock(); defer { lock.unlock() }
-        return _latest
-    }
+    // Kept for changing the picture area while the stream runs.
+    private var filter: SCContentFilter?
+    private struct Params { var frameRate: FrameRateOption; var captureAudio: Bool; var showCursor: Bool }
+    private var params: Params?
+    private var crop: CGRect?
+    /// True while the crop editor shows the whole window.
+    private var showsFullPicture = false
 
-    var sink: CaptureSink? {
-        get { lock.lock(); defer { lock.unlock() }; return _sink }
-        set { lock.lock(); _sink = newValue; lock.unlock() }
+    init(hub: FrameHub) {
+        self.hub = hub
+        super.init()
     }
 
     // MARK: Start / stop
@@ -50,21 +49,9 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         let filter = try Self.makeFilter(for: source, content: content)
 
-        let cfg = SCStreamConfiguration()
-        let scale = CGFloat(filter.pointPixelScale)
-        cfg.width = max(2, Int((filter.contentRect.width * scale).rounded()))
-        cfg.height = max(2, Int((filter.contentRect.height * scale).rounded()))
-        cfg.minimumFrameInterval = frameRate.frameDuration
-        cfg.pixelFormat = kCVPixelFormatType_32BGRA
-        cfg.colorSpaceName = CGColorSpace.sRGB
-        cfg.queueDepth = 6
-        cfg.showsCursor = showCursor
-        cfg.captureResolution = .best
-        cfg.ignoreShadowsSingleWindow = true
-        cfg.capturesAudio = captureAudio
-        cfg.sampleRate = 48_000
-        cfg.channelCount = 2
-        cfg.excludesCurrentProcessAudio = true
+        crop = source.crop
+        params = Params(frameRate: frameRate, captureAudio: captureAudio, showCursor: showCursor)
+        let cfg = makeConfig(filter: filter, params: params!)
 
         let s = SCStream(filter: filter, configuration: cfg, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
@@ -73,14 +60,64 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         try await s.startCapture()
         stream = s
+        self.filter = filter
+    }
+
+    /// Picture area of the source (nil = all of it); applied to the running stream without restarting it.
+    @MainActor
+    func setCrop(_ crop: CGRect?) async {
+        self.crop = crop
+        await updateArea()
+    }
+
+    /// Crop editor: show the uncropped window while it is open.
+    @MainActor
+    func setShowsFullPicture(_ full: Bool) async {
+        showsFullPicture = full
+        await updateArea()
+    }
+
+    @MainActor
+    private func updateArea() async {
+        guard let stream, let filter, let params else { return }
+        try? await stream.updateConfiguration(makeConfig(filter: filter, params: params))
+    }
+
+    private func makeConfig(filter: SCContentFilter, params p: Params) -> SCStreamConfiguration {
+        let cfg = SCStreamConfiguration()
+        // Native pixels; limited to the crop (normalized, top-left origin) via `sourceRect`.
+        let scale = CGFloat(filter.pointPixelScale)
+        let content = filter.contentRect.size
+        var area = CGRect(origin: .zero, size: content)
+        if !showsFullPicture, let crop = crop?.intersection(CGRect(x: 0, y: 0, width: 1, height: 1)),
+           !crop.isNull, crop.width > 0.02, crop.height > 0.02 {
+            area = CGRect(x: crop.minX * content.width, y: crop.minY * content.height,
+                          width: crop.width * content.width, height: crop.height * content.height)
+            cfg.sourceRect = area
+        }
+        cfg.width = max(2, Int((area.width * scale).rounded()) & ~1)
+        cfg.height = max(2, Int((area.height * scale).rounded()) & ~1)
+        cfg.minimumFrameInterval = p.frameRate.frameDuration
+        cfg.pixelFormat = kCVPixelFormatType_32BGRA
+        cfg.colorSpaceName = CGColorSpace.sRGB
+        cfg.queueDepth = 6
+        cfg.showsCursor = p.showCursor
+        cfg.captureResolution = .best
+        cfg.ignoreShadowsSingleWindow = true
+        cfg.capturesAudio = p.captureAudio
+        cfg.sampleRate = 48_000
+        cfg.channelCount = 2
+        cfg.excludesCurrentProcessAudio = true
+        return cfg
     }
 
     @MainActor
     func stop() async {
         guard let s = stream else { return }
         stream = nil
+        filter = nil
         try? await s.stopCapture()
-        lock.withLock { _latest = nil }
+        hub.reset()
     }
 
     static func makeFilter(for source: CaptureSource, content: SCShareableContent) throws -> SCContentFilter {
@@ -104,6 +141,21 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             let ownApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
             return SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+        case .vuer:
+            let appName = source.appName ?? "Vuer"
+            let running = content.applications.contains { VuerApp.isVuer(bundleID: $0.bundleIdentifier, appName: $0.applicationName) }
+            let candidates = content.windows.filter { w in
+                VuerApp.isVuer(bundleID: w.owningApplication?.bundleIdentifier, appName: w.owningApplication?.applicationName)
+                    && w.windowLayer == 0 && w.frame.width > 200 && w.frame.height > 120
+            }
+            // The biggest window is the monitor; prefer the one on screen.
+            guard let window = candidates.filter(\.isOnScreen).max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
+                    ?? candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
+                throw running ? CaptureError.vuerNoWindow(appName) : CaptureError.vuerNotRunning(appName)
+            }
+            return SCContentFilter(desktopIndependentWindow: window)
+        case .decklink:
+            throw CaptureError.sourceNotFound(source.label)
         }
     }
 
@@ -119,13 +171,9 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
                 SCFrameStatus(rawValue: rawStatus) == .complete,
                 let pb = sampleBuffer.imageBuffer
             else { return }
-            lock.lock()
-            _latest = pb
-            let sink = _sink
-            lock.unlock()
-            sink?.appendVideo(pb, pts: sampleBuffer.presentationTimeStamp)
+            hub.pushVideo(pb, pts: sampleBuffer.presentationTimeStamp)
         case .audio:
-            sink?.appendAudio(sampleBuffer)
+            hub.pushAudio(sampleBuffer)
         default:
             break
         }
@@ -137,7 +185,8 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.stream === stream else { return }
             self.stream = nil
-            self.lock.lock(); self._latest = nil; self.lock.unlock()
+            self.filter = nil
+            self.hub.reset()
             self.onUnexpectedStop?(error)
         }
     }

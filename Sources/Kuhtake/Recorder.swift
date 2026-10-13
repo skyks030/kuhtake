@@ -22,6 +22,9 @@ final class Recorder: CaptureSink {
         var frameRate: FrameRateOption
         var bitrateMbps: Double
         var audio: Bool
+        /// Start timecode (frames since midnight at `frameRate`'s timecode base), asked for at the first frame.
+        /// nil = no timecode track.
+        var timecode: (() -> Int)?
     }
 
     struct Result {
@@ -39,6 +42,9 @@ final class Recorder: CaptureSink {
     private var videoInput: AVAssetWriterInput?
     private var audioInput: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var timecodeInput: AVAssetWriterInput?
+    private var timecodeFormat: CMTimeCodeFormatDescription?
+    private var startTimecode = 0
     private var outSize: CGSize = .zero
     private var startTime: CMTime = .invalid
     private var lastIndex = -1
@@ -94,11 +100,13 @@ final class Recorder: CaptureSink {
                   let copy = render(previous, pool: adaptor.pixelBufferPool) {
                 // The encoder needs a distinct buffer per frame; re-appending the same one fails the writer.
                 guard adaptor.append(copy, withPresentationTime: frameTime(lastIndex + 1)) else { return }
+                appendTimecode(lastIndex + 1)
                 lastIndex += 1
                 filled += 1
             }
         }
         if videoInput.isReadyForMoreMediaData, adaptor.append(rendered, withPresentationTime: frameTime(index)) {
+            appendTimecode(index)
             lastIndex = index
             lastBuffer = rendered
         }
@@ -179,6 +187,10 @@ final class Recorder: CaptureSink {
             }
         }
 
+        if let timecode = cfg.timecode {
+            addTimecodeTrack(to: w, video: vIn, start: timecode())
+        }
+
         guard w.startWriting() else {
             throw RecorderError.writerFailed(w.error?.localizedDescription ?? "startWriting")
         }
@@ -187,6 +199,49 @@ final class Recorder: CaptureSink {
         writer = w
         videoInput = vIn
         self.adaptor = adaptor
+    }
+
+    // MARK: Timecode
+
+    /// QuickTime timecode track ('tmcd'), linked to the video track – NLEs (Resolve, Premiere, Avid, FCP) read the
+    /// clip's start timecode from it. MPEG-4 files can't carry one; they are written without.
+    private func addTimecodeTrack(to w: AVAssetWriter, video: AVAssetWriterInput, start: Int) {
+        let quanta = UInt32(max(1, Int(cfg.frameRate.nominal.rounded())))
+        var format: CMTimeCodeFormatDescription?
+        guard CMTimeCodeFormatDescriptionCreate(allocator: nil, timeCodeFormatType: kCMTimeCodeFormatType_TimeCode32,
+                                                frameDuration: cfg.frameRate.frameDuration, frameQuanta: quanta,
+                                                flags: kCMTimeCodeFlag_24HourMax, extensions: nil,
+                                                formatDescriptionOut: &format) == noErr, let format else { return }
+        let input = AVAssetWriterInput(mediaType: .timecode, outputSettings: nil, sourceFormatHint: format)
+        input.expectsMediaDataInRealTime = true
+        guard w.canAdd(input) else { return }
+        w.add(input)
+        video.addTrackAssociation(withTrackOf: input, type: AVAssetTrack.AssociationType.timecode.rawValue)
+        timecodeInput = input
+        timecodeFormat = format
+        startTimecode = start
+    }
+
+    /// One timecode sample per video frame, right after it (keeps both tracks interleaved).
+    private func appendTimecode(_ index: Int) {
+        guard let input = timecodeInput, let format = timecodeFormat, input.isReadyForMoreMediaData else { return }
+        let dayFrames = 24 * 3600 * max(1, Int(cfg.frameRate.nominal.rounded()))
+        var value = Int32((startTimecode + index) % dayFrames).bigEndian
+        var block: CMBlockBuffer?
+        guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: 4, blockAllocator: nil,
+                                                 customBlockSource: nil, offsetToData: 0, dataLength: 4,
+                                                 flags: kCMBlockBufferAssureMemoryNowFlag, blockBufferOut: &block) == noErr,
+              let block, CMBlockBufferReplaceDataBytes(with: &value, blockBuffer: block, offsetIntoDestination: 0, dataLength: 4) == noErr
+        else { return }
+        var timing = CMSampleTimingInfo(duration: cfg.frameRate.frameDuration, presentationTimeStamp: frameTime(index),
+                                        decodeTimeStamp: .invalid)
+        var size = 4
+        var sample: CMSampleBuffer?
+        guard CMSampleBufferCreate(allocator: nil, dataBuffer: block, dataReady: true, makeDataReadyCallback: nil, refcon: nil,
+                                   formatDescription: format, sampleCount: 1, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+                                   sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr,
+              let sample else { return }
+        input.append(sample)
     }
 
     /// Scales the source aspect-fit into the output size (black bars where needed).
@@ -226,6 +281,7 @@ final class Recorder: CaptureSink {
             let duration = CMTimeSubtract(end, self.startTime).seconds
             self.videoInput?.markAsFinished()
             self.audioInput?.markAsFinished()
+            self.timecodeInput?.markAsFinished()
             writer.endSession(atSourceTime: end)
             writer.finishWriting {
                 let result: Swift.Result<Result, Error> = writer.status == .completed

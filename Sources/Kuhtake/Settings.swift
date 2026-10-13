@@ -95,14 +95,38 @@ enum RegionShape: String, CaseIterable, Codable, Identifiable {
 // MARK: - Capture source
 
 struct CaptureSource: Codable, Equatable {
-    enum Kind: String, Codable { case window, display }
+    enum Kind: String, Codable { case window, display, decklink, vuer }
     var kind: Kind
     var windowID: UInt32?
     var displayID: UInt32?
     var appBundleID: String?
     var appName: String?
     var windowTitle: String?
+    /// Persistent ID of a Blackmagic DeckLink / UltraStudio input.
+    var deckLinkID: String?
     var label: String
+    /// Window / screen sources: only this part of the picture (normalized, top-left origin). nil = everything.
+    var crop: CGRect?
+
+    static func deckLink(_ device: DeckLinkDevice) -> CaptureSource {
+        CaptureSource(kind: .decklink, deckLinkID: device.id, label: "Blackmagic: \(device.name)")
+    }
+
+    /// The Teradek VUER app's window, found again by its bundle ID whenever the app (re)starts.
+    static func vuer(_ app: VuerApp = .hdr) -> CaptureSource {
+        CaptureSource(kind: .vuer, appBundleID: app.bundleID, appName: app.name, label: "Teradek \(app.name)")
+    }
+
+    /// Screen, window and VUER capture need the screen recording permission, DeckLink doesn't.
+    var needsScreenCapturePermission: Bool { kind != .decklink }
+    /// Captured via ScreenCaptureKit (a part of the picture can be cut out).
+    var isScreenCapture: Bool { kind != .decklink }
+
+    func isSame(as other: CaptureSource) -> Bool {
+        guard kind == other.kind else { return false }
+        if kind == .vuer { return appBundleID == other.appBundleID }
+        return windowID == other.windowID && displayID == other.displayID && deckLinkID == other.deckLinkID
+    }
 }
 
 // MARK: - Settings store
@@ -134,12 +158,28 @@ final class AppSettings: ObservableObject {
     @Published var stopDelay: Double { didSet { d.set(stopDelay, forKey: "stopDelay") } }
     @Published var baseline: [Float]? { didSet { save(baseline, "baseline") } }
 
+    /// Last picture area used for the VUER window.
+    @Published var vuerCrop: CGRect? { didSet { save(vuerCrop, "vuerCrop") } }
+
+    /// Folder / file name template, see `NamingScheme`.
+    @Published var namingTemplate: String { didSet { d.set(namingTemplate, forKey: "namingTemplate") } }
+
+    /// Read the camera's timecode from the picture (OCR).
+    @Published var timecodeEnabled: Bool { didSet { d.set(timecodeEnabled, forKey: "timecodeEnabled") } }
+    /// Where the timecode is shown in the picture (normalized, top-left origin).
+    @Published var timecodeRegion: CGRect { didSet { save(timecodeRegion, "timecodeRegion") } }
+
     /// Values used for the *next* clip.
     @Published var scene: String { didSet { d.set(scene, forKey: "scene") } }
     @Published var shot: Int { didSet { d.set(shot, forKey: "shot") } }
     @Published var take: Int { didSet { d.set(take, forKey: "take") } }
 
     @Published var skippedVersion: String? { didSet { d.set(skippedVersion, forKey: "skippedVersion") } }
+
+    /// Customized shortcuts; actions missing here use their default.
+    @Published var shortcuts: [ShortcutAction: ShortcutBinding] { didSet { save(shortcuts, "shortcuts") } }
+    /// Source browser: show only the last take of each shot.
+    @Published var browserLastTakesOnly: Bool { didSet { d.set(browserLastTakesOnly, forKey: "browserLastTakesOnly") } }
 
     private init() {
         let defaultFolder = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
@@ -161,10 +201,20 @@ final class AppSettings: ObservableObject {
         startDelay = d.object(forKey: "startDelay") as? Double ?? 0.3
         stopDelay = d.object(forKey: "stopDelay") as? Double ?? 1.5
         baseline = Self.load("baseline")
+        vuerCrop = Self.load("vuerCrop")
+        namingTemplate = d.string(forKey: "namingTemplate") ?? NamingScheme.defaultTemplate
+        timecodeEnabled = d.object(forKey: "timecodeEnabled") as? Bool ?? true
+        timecodeRegion = Self.load("timecodeRegion") ?? CGRect(x: 0.38, y: 0.9, width: 0.24, height: 0.06)
         scene = d.string(forKey: "scene") ?? "1"
         shot = d.object(forKey: "shot") as? Int ?? 1
         take = d.object(forKey: "take") as? Int ?? 1
         skippedVersion = d.string(forKey: "skippedVersion")
+        shortcuts = Self.load("shortcuts") ?? [:]
+        browserLastTakesOnly = d.bool(forKey: "browserLastTakesOnly")
+    }
+
+    func shortcut(for action: ShortcutAction) -> ShortcutBinding {
+        shortcuts[action] ?? action.defaultBinding
     }
 
     /// ProRes only lives in QuickTime containers.

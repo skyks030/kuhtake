@@ -32,6 +32,13 @@
 	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Kuhtake filmt das gewählte Fenster bzw. den Bildschirm ab, um den Live-Feed aufzuzeichnen.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Kuhtake sucht Teradek-Encoder (Serv Pro, Serv 4K) im lokalen Netzwerk, um sie neben der VUER-Quelle anzuzeigen.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_tdstream._tcp</string>
+		<string>_apollo._tcp</string>
+	</array>
 	<key>KuhtakeGitHubRepo</key>
 	<string>skyks030/kuhtake</string>
 </dict>

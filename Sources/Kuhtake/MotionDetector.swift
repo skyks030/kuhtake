@@ -123,8 +123,11 @@ final class MotionDetector: ObservableObject {
     }
 
     /// Average color per grid cell (RGB triplets 0…1). Cells outside an ellipse are marked with -1.
+    /// Reads BGRA (screen capture, DeckLink RGB) and 8-bit 4:2:2 YCbCr '2vuy' (DeckLink YUV).
     static func signature(of pb: CVPixelBuffer, region: CGRect, shape: RegionShape) -> [Float]? {
-        guard CVPixelBufferGetPixelFormatType(pb) == kCVPixelFormatType_32BGRA else { return nil }
+        let format = CVPixelBufferGetPixelFormatType(pb)
+        guard format == kCVPixelFormatType_32BGRA || format == kCVPixelFormatType_422YpCbCr8 else { return nil }
+        let isYUV = format == kCVPixelFormatType_422YpCbCr8
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(pb)?.assumingMemoryBound(to: UInt8.self) else { return nil }
@@ -146,23 +149,33 @@ final class MotionDetector: ObservableObject {
                     let dx = cx - 0.5, dy = cy - 0.5
                     if dx * dx + dy * dy > 0.25 { continue }
                 }
-                var sr = 0, sg = 0, sb = 0, count = 0
+                var sr: Float = 0, sg: Float = 0, sb: Float = 0, count = 0
                 for sy in 0..<3 {
                     for sx in 0..<3 {
                         let fx = (CGFloat(gx) + (CGFloat(sx) + 0.5) / 3) / CGFloat(n)
                         let fy = (CGFloat(gy) + (CGFloat(sy) + 0.5) / 3) / CGFloat(n)
                         let px = min(width - 1, max(0, Int(rx + fx * rw)))
                         let py = min(height - 1, max(0, Int(ry + fy * rh)))
-                        let p = base + py * bpr + px * 4
-                        sb += Int(p[0]); sg += Int(p[1]); sr += Int(p[2])
+                        if isYUV {
+                            // Cb Y0 Cr Y1 per pixel pair, video range, Rec. 709.
+                            let pair = base + py * bpr + (px & ~1) * 2
+                            let y = (Float(pair[(px & 1) == 0 ? 1 : 3]) - 16) / 219
+                            let cb = (Float(pair[0]) - 128) / 224, cr = (Float(pair[2]) - 128) / 224
+                            sr += min(max(y + 1.5748 * cr, 0), 1)
+                            sg += min(max(y - 0.1873 * cb - 0.4681 * cr, 0), 1)
+                            sb += min(max(y + 1.8556 * cb, 0), 1)
+                        } else {
+                            let p = base + py * bpr + px * 4
+                            sb += Float(p[0]) / 255; sg += Float(p[1]) / 255; sr += Float(p[2]) / 255
+                        }
                         count += 1
                     }
                 }
                 let o = (gy * n + gx) * 3
-                let div = Float(count) * 255
-                out[o] = Float(sr) / div
-                out[o + 1] = Float(sg) / div
-                out[o + 2] = Float(sb) / div
+                let div = Float(count)
+                out[o] = sr / div
+                out[o + 1] = sg / div
+                out[o + 2] = sb / div
             }
         }
         return out
