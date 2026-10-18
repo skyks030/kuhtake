@@ -7,6 +7,7 @@ import SwiftUI
 struct SourceBrowserView: View {
     @ObservedObject private var model = PreviewModel.shared
     @ObservedObject private var index = ClipIndex.shared
+    @ObservedObject private var settings = AppSettings.shared
 
     /// Width of the take list, remembered between launches (dragged at the divider).
     @AppStorage("browserSidebarWidth") private var sidebarWidth: Double = Self.defaultSidebarWidth
@@ -17,10 +18,16 @@ struct SourceBrowserView: View {
     static let sidebarRange: ClosedRange<Double> = 220...560
 
     var body: some View {
+        let hidden = settings.browserSidebarHidden
         HStack(spacing: 0) {
+            // Folded away rather than removed, so open folders and the scroll position are still there when it returns.
             TakeSidebar()
                 .frame(width: min(max(sidebarWidth, Self.sidebarRange.lowerBound), Self.sidebarRange.upperBound))
-            divider
+                .frame(width: hidden ? 0 : nil, alignment: .trailing)
+                .clipped()
+                .allowsHitTesting(!hidden)
+                .accessibilityHidden(hidden)
+            if !hidden { divider }
             HStack(spacing: 1) {
                 MonitorView(monitor: model.monitor1, number: 1, isLatest: isLatest(model.monitor1))
                 if model.showSecondMonitor {
@@ -31,9 +38,19 @@ struct SourceBrowserView: View {
                 }
             }
             .background(Color.black.opacity(0.6))
+            .overlay(alignment: .topLeading) {
+                if hidden {
+                    SidebarToggle()
+                        .padding(8)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                        .padding(8)
+                        .transition(.opacity)
+                }
+            }
             .frame(minWidth: 420)
             .animation(.easeInOut(duration: 0.2), value: model.showSecondMonitor)
         }
+        .animation(.easeInOut(duration: 0.2), value: hidden)
     }
 
     private var divider: some View {
@@ -156,6 +173,7 @@ private struct TakeSidebar: View {
             }
             Spacer()
             if index.isScanning { ProgressView().controlSize(.mini) }
+            SidebarToggle()
             Button {
                 settings.browserLastTakesOnly.toggle()
             } label: {
@@ -362,6 +380,21 @@ private struct ShotRow: View {
             Spacer()
             Text("\(shot.takes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Folds the take list away or brings it back (also ⌃⌘S, menu „Darstellung“).
+private struct SidebarToggle: View {
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        Button {
+            settings.browserSidebarHidden.toggle()
+        } label: {
+            Image(systemName: "sidebar.left").font(.title3).foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help(settings.browserSidebarHidden ? "Seitenleiste einblenden (⌃⌘S)" : "Seitenleiste ausblenden (⌃⌘S)")
     }
 }
 

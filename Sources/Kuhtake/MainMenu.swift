@@ -74,6 +74,9 @@ enum MainMenu {
         m.addItem(action(.liveView))
         m.addItem(action(.sourceBrowser))
         m.addItem(custom("Take suchen …  (⇧Leertaste)", #selector(MenuTarget.quickSearch)))
+        let sidebar = custom("Seitenleiste ausblenden", #selector(MenuTarget.toggleSidebar), key: "s")
+        sidebar.keyEquivalentModifierMask = [.command, .control]
+        m.addItem(sidebar)
         m.addItem(.separator())
         m.addItem(action(.showPreview))
         return m
@@ -127,10 +130,19 @@ private final class MenuTarget: NSObject, NSMenuItemValidation {
     @objc func configureTimecode() { TimecodeWindow.show() }
     @objc func configureCrop() { CropWindow.show() }
     @MainActor @objc func quickSearch() { QuickSearch.open() }
+    @MainActor @objc func toggleSidebar() {
+        AppSettings.shared.browserSidebarHidden.toggle()
+        // From the live picture: show the list in the file browser right away.
+        if !AppSettings.shared.browserSidebarHidden { PreviewWindow.show(mode: .browser) }
+    }
     @objc func quit() { AppController.shared.quitSafely() }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(configureCrop) { return AppSettings.shared.source?.isScreenCapture == true }
+        if item.action == #selector(toggleSidebar) {
+            item.title = AppSettings.shared.browserSidebarHidden ? "Seitenleiste einblenden" : "Seitenleiste ausblenden"
+            return true
+        }
         guard let raw = item.representedObject as? String, let a = ShortcutAction(rawValue: raw) else { return true }
         let c = AppController.shared
         switch a {

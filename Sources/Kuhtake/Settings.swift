@@ -192,6 +192,8 @@ final class AppSettings: ObservableObject {
     @Published var shortcuts: [ShortcutAction: ShortcutBinding] { didSet { save(shortcuts, "shortcuts") } }
     /// Source browser: show only the last take of each shot.
     @Published var browserLastTakesOnly: Bool { didSet { d.set(browserLastTakesOnly, forKey: "browserLastTakesOnly") } }
+    /// File browser: take list folded away (⌃⌘S), the monitors get the whole width.
+    @Published var browserSidebarHidden: Bool { didSet { d.set(browserSidebarHidden, forKey: "browserSidebarHidden") } }
     /// File browser: scenes / shots folded up in the take list (scene ID or "scene|shot").
     @Published var browserCollapsed: Set<String> { didSet { save(browserCollapsed, "browserCollapsed") } }
     /// Teradek network streams entered by hand (newest first).
@@ -231,6 +233,7 @@ final class AppSettings: ObservableObject {
         shortcuts = Self.load("shortcuts") ?? [:]
         browserLastTakesOnly = d.bool(forKey: "browserLastTakesOnly")
         browserCollapsed = Self.load("browserCollapsed") ?? []
+        browserSidebarHidden = d.bool(forKey: "browserSidebarHidden")
         recentStreamAddresses = Self.load("recentStreamAddresses") ?? []
         // Store the migrated state once, so the migration never runs again.
         d.set(namingTemplate, forKey: "namingTemplate")
