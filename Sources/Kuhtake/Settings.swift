@@ -95,7 +95,7 @@ enum RegionShape: String, CaseIterable, Codable, Identifiable {
 // MARK: - Capture source
 
 struct CaptureSource: Codable, Equatable {
-    enum Kind: String, Codable { case window, display, decklink, vuer }
+    enum Kind: String, Codable { case window, display, decklink, vuer, teradek }
     var kind: Kind
     var windowID: UInt32?
     var displayID: UInt32?
@@ -104,6 +104,8 @@ struct CaptureSource: Codable, Equatable {
     var windowTitle: String?
     /// Persistent ID of a Blackmagic DeckLink / UltraStudio input.
     var deckLinkID: String?
+    /// Teradek network stream: encoder address or stream URL (rtsp://, udp://@:port, tcp://, http…m3u8), see `StreamAddress`.
+    var streamURL: String?
     var label: String
     /// Window / screen sources: only this part of the picture (normalized, top-left origin). nil = everything.
     var crop: CGRect?
@@ -117,14 +119,20 @@ struct CaptureSource: Codable, Equatable {
         CaptureSource(kind: .vuer, appBundleID: app.bundleID, appName: app.name, label: "Teradek \(app.name)")
     }
 
-    /// Screen, window and VUER capture need the screen recording permission, DeckLink doesn't.
-    var needsScreenCapturePermission: Bool { kind != .decklink }
+    /// The video stream a Teradek encoder (Serv Pro, Cube …) sends over the network, received and decoded natively.
+    static func teradek(address: String, name: String? = nil) -> CaptureSource {
+        CaptureSource(kind: .teradek, streamURL: address, label: "Teradek-Stream: \(name ?? address)")
+    }
+
+    /// Screen, window and VUER capture need the screen recording permission, DeckLink and network streams don't.
+    var needsScreenCapturePermission: Bool { isScreenCapture }
     /// Captured via ScreenCaptureKit (a part of the picture can be cut out).
-    var isScreenCapture: Bool { kind != .decklink }
+    var isScreenCapture: Bool { kind != .decklink && kind != .teradek }
 
     func isSame(as other: CaptureSource) -> Bool {
         guard kind == other.kind else { return false }
         if kind == .vuer { return appBundleID == other.appBundleID }
+        if kind == .teradek { return streamURL == other.streamURL }
         return windowID == other.windowID && displayID == other.displayID && deckLinkID == other.deckLinkID
     }
 }
@@ -184,6 +192,10 @@ final class AppSettings: ObservableObject {
     @Published var shortcuts: [ShortcutAction: ShortcutBinding] { didSet { save(shortcuts, "shortcuts") } }
     /// Source browser: show only the last take of each shot.
     @Published var browserLastTakesOnly: Bool { didSet { d.set(browserLastTakesOnly, forKey: "browserLastTakesOnly") } }
+    /// File browser: scenes / shots folded up in the take list (scene ID or "scene|shot").
+    @Published var browserCollapsed: Set<String> { didSet { save(browserCollapsed, "browserCollapsed") } }
+    /// Teradek network streams entered by hand (newest first).
+    @Published var recentStreamAddresses: [String] { didSet { save(recentStreamAddresses, "recentStreamAddresses") } }
 
     private init() {
         let defaultFolder = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
@@ -218,6 +230,8 @@ final class AppSettings: ObservableObject {
         skippedVersion = d.string(forKey: "skippedVersion")
         shortcuts = Self.load("shortcuts") ?? [:]
         browserLastTakesOnly = d.bool(forKey: "browserLastTakesOnly")
+        browserCollapsed = Self.load("browserCollapsed") ?? []
+        recentStreamAddresses = Self.load("recentStreamAddresses") ?? []
         // Store the migrated state once, so the migration never runs again.
         d.set(namingTemplate, forKey: "namingTemplate")
         d.set(sceneLabel, forKey: "sceneLabel")

@@ -2,8 +2,8 @@ import AVFoundation
 import AppKit
 import SwiftUI
 
-/// ⌘F: takes of the working folder on the left, monitor 1 in the middle, monitor 2 on the right.
-/// 1 / 2 load the selected take into a monitor, Space plays/pauses both, ⌘R returns to the live picture.
+/// ⌘F (File Browser): takes of the working folder on the left, monitor 1 in the middle, monitor 2 on the right.
+/// 1 / 2 load the selected take into a monitor, Space plays/pauses both, J / K / L shuttle, ⌘R returns to the live picture.
 struct SourceBrowserView: View {
     @ObservedObject private var model = PreviewModel.shared
     @ObservedObject private var index = ClipIndex.shared
@@ -68,7 +68,6 @@ private struct TakeSidebar: View {
     @ObservedObject private var model = PreviewModel.shared
     @ObservedObject private var index = ClipIndex.shared
     @ObservedObject private var settings = AppSettings.shared
-    @State private var collapsed: Set<String> = []
     @State private var renaming: TakeFile?
 
     var body: some View {
@@ -88,6 +87,7 @@ private struct TakeSidebar: View {
                                             TakeRow(take: take, isLast: take == shot.lastTake, isNewest: take == index.latest,
                                                     onMonitor1: model.monitor1.take == take,
                                                     onMonitor2: model.showSecondMonitor && model.monitor2.take == take)
+                                                .listRowInsets(EdgeInsets(top: 1, leading: 4, bottom: 1, trailing: 4))
                                                 .tag(take.id)
                                                 .id(take.id)
                                                 .draggable(take.id)
@@ -170,14 +170,22 @@ private struct TakeSidebar: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
-            KeyHint(key: "1", text: "Monitor 1")
-            KeyHint(key: "2", text: "Monitor 2")
-            KeyHint(key: "␣", text: "Play")
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                KeyHint(key: "1", text: "Monitor 1")
+                KeyHint(key: "2", text: "Monitor 2")
+                KeyHint(key: "␣", text: "Play")
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                KeyHint(key: "J K L", text: "Shuttle")
+                KeyHint(key: "⇧␣", text: "Suchen")
+                Spacer(minLength: 0)
+            }
         }
         .padding(.horizontal, 12)
-        .frame(height: 30)
+        .padding(.vertical, 7)
+        .help("J / L: rückwärts / vorwärts abspielen, mehrmals drücken für 2×, 4×, 8× · K: Stopp · ⇧Leertaste: Take suchen")
     }
 
     private var emptyState: some View {
@@ -224,17 +232,18 @@ private struct TakeSidebar: View {
         settings.browserLastTakesOnly ? shot.lastTake.map { [$0] } ?? [] : shot.takes
     }
 
+    /// Folded scenes / shots are remembered (also across launches).
     private func expanded(_ id: String) -> Binding<Bool> {
-        Binding(get: { !collapsed.contains(id) }, set: { open in
-            if open { collapsed.remove(id) } else { collapsed.insert(id) }
+        Binding(get: { !settings.browserCollapsed.contains(id) }, set: { open in
+            if open { settings.browserCollapsed.remove(id) } else { settings.browserCollapsed.insert(id) }
         })
     }
 
     /// Opens the scene and shot of the selected take.
     private func reveal(_ id: TakeFile.ID) {
         guard let take = model.selectedTake else { return }
-        collapsed.remove(take.scene)
-        collapsed.remove("\(take.scene)|\(take.shot)")
+        let ids: Set<String> = [take.scene, "\(take.scene)|\(take.shot)"]
+        if !settings.browserCollapsed.isDisjoint(with: ids) { settings.browserCollapsed.subtract(ids) }
     }
 }
 
@@ -384,8 +393,27 @@ private struct TakeRow: View {
             if onMonitor1 { MonitorBadge(number: 1) }
             if onMonitor2 { MonitorBadge(number: 2) }
         }
-        .opacity(isLast ? 1 : 0.8)
+        .opacity(isLast || onMonitor1 || onMonitor2 ? 1 : 0.8)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(monitorHighlight)
         .task(id: take) { await loadInfo() }
+    }
+
+    /// The whole row in the colour of the monitor showing this take (green = 1, yellow = 2, both = split).
+    @ViewBuilder
+    private var monitorHighlight: some View {
+        let colors = (onMonitor1 ? [MonitorColor.color(1)] : []) + (onMonitor2 ? [MonitorColor.color(2)] : [])
+        if !colors.isEmpty {
+            let shape = RoundedRectangle(cornerRadius: 6)
+            let fill = colors.count == 1
+                ? LinearGradient(colors: [colors[0], colors[0]], startPoint: .leading, endPoint: .trailing)
+                : LinearGradient(stops: [.init(color: colors[0], location: 0), .init(color: colors[0], location: 0.5),
+                                         .init(color: colors[1], location: 0.5), .init(color: colors[1], location: 1)],
+                                 startPoint: .leading, endPoint: .trailing)
+            shape.fill(fill.opacity(0.28))
+                .overlay(shape.strokeBorder(fill.opacity(0.85), lineWidth: 1.5))
+        }
     }
 
     private var subtitle: String {
@@ -407,9 +435,16 @@ private struct MonitorBadge: View {
     var body: some View {
         Text("\(number)")
             .font(.caption2.weight(.heavy))
-            .foregroundStyle(.white)
+            .foregroundStyle(number == 2 ? Color.black : .white)
             .frame(width: 15, height: 15)
-            .background(RoundedRectangle(cornerRadius: 3).fill(number == 1 ? Color.accentColor : Color.orange))
+            .background(RoundedRectangle(cornerRadius: 3).fill(MonitorColor.color(number)))
+    }
+}
+
+/// Monitor 1 is green, monitor 2 yellow – the frame around the monitor, its badge and the take rows showing it.
+enum MonitorColor {
+    static func color(_ number: Int) -> Color {
+        number == 1 ? Color(red: 0.2, green: 0.78, blue: 0.35) : Color(red: 0.98, green: 0.78, blue: 0.1)
     }
 }
 
@@ -427,25 +462,70 @@ private struct KeyHint: View {
     }
 }
 
-/// Thumbnails and durations, generated once per file version.
+/// Thumbnails, durations and start timecodes, generated once per file version.
 actor TakeInfoCache {
     static let shared = TakeInfoCache()
     struct Info { var thumbnail: CGImage?; var duration: Double? }
+    /// What the quick search needs (no thumbnail – cheap enough for every take).
+    struct Meta {
+        var duration: Double?
+        /// Start timecode in frames since midnight, from the QuickTime timecode track.
+        var timecodeFrames: Int?
+        var timecodeQuanta: Int = 25
+    }
     private var cache: [String: Info] = [:]
+    private var metaCache: [String: Meta] = [:]
+
+    private func key(_ take: TakeFile) -> String { "\(take.url.path)|\(take.size)" }
 
     func info(for take: TakeFile) async -> Info {
-        let key = "\(take.url.path)|\(take.size)"
+        let key = key(take)
         if let hit = cache[key] { return hit }
+        let meta = await meta(for: take)
         let asset = AVURLAsset(url: take.url)
-        let duration = (try? await asset.load(.duration))?.seconds
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 160, height: 90)
-        let at = CMTime(seconds: min(1, (duration ?? 0) / 2), preferredTimescale: 600)
+        let at = CMTime(seconds: min(1, (meta.duration ?? 0) / 2), preferredTimescale: 600)
         let image = try? await gen.image(at: at).image
-        let info = Info(thumbnail: image, duration: duration.flatMap { $0.isFinite ? $0 : nil })
+        let info = Info(thumbnail: image, duration: meta.duration)
         cache[key] = info
         return info
+    }
+
+    /// Already known metadata, without loading anything.
+    func cachedMeta(for take: TakeFile) -> Meta? { metaCache[key(take)] }
+
+    func meta(for take: TakeFile) async -> Meta {
+        let key = key(take)
+        if let hit = metaCache[key] { return hit }
+        let asset = AVURLAsset(url: take.url)
+        var meta = Meta()
+        let duration = (try? await asset.load(.duration))?.seconds
+        meta.duration = duration.flatMap { $0.isFinite ? $0 : nil }
+        if let track = try? await asset.loadTracks(withMediaType: .timecode).first {
+            (meta.timecodeFrames, meta.timecodeQuanta) = Self.startTimecode(asset: asset, track: track)
+        }
+        metaCache[key] = meta
+        return meta
+    }
+
+    /// First sample of a 'tmcd' track: a big-endian frame number.
+    private static func startTimecode(asset: AVAsset, track: AVAssetTrack) -> (Int?, Int) {
+        guard let reader = try? AVAssetReader(asset: asset) else { return (nil, 25) }
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        guard reader.canAdd(output) else { return (nil, 25) }
+        reader.add(output)
+        guard reader.startReading(), let sample = output.copyNextSampleBuffer() else { return (nil, 25) }
+        defer { reader.cancelReading() }
+        var quanta = 25
+        if let fmt = sample.formatDescription {
+            quanta = max(1, Int(CMTimeCodeFormatDescriptionGetFrameQuanta(fmt)))
+        }
+        guard let block = sample.dataBuffer, CMBlockBufferGetDataLength(block) >= 4 else { return (nil, quanta) }
+        var raw: UInt32 = 0
+        guard CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: 4, destination: &raw) == noErr else { return (nil, quanta) }
+        return (Int(UInt32(bigEndian: raw)), quanta)
     }
 }
 

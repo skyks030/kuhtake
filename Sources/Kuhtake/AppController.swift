@@ -15,6 +15,7 @@ final class AppController: ObservableObject {
     let hub = FrameHub()
     private(set) lazy var engine = CaptureEngine(hub: hub)
     private(set) lazy var deckLink = DeckLinkEngine(hub: hub)
+    private(set) lazy var stream = TeradekStreamEngine(hub: hub)
     let detector = MotionDetector()
     let timecode = TimecodeReader()
 
@@ -31,6 +32,8 @@ final class AppController: ObservableObject {
         var signalFormat: String?
         var deviceName: String?
         var reconnects = 0
+        /// Network stream: statistics lines (transport, packets, decoder).
+        var streamDetails: [String] = []
     }
     @Published private(set) var health = Health()
     private var healthTimer: Timer?
@@ -41,12 +44,19 @@ final class AppController: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var restartWork: DispatchWorkItem?
     private var captureTask: Task<Void, Never>?
+    /// Copies finished takes into the project folder, one after the other.
+    private let storeQueue = DispatchQueue(label: "kuhtake.store", qos: .userInitiated)
+    /// Recordings being finished plus copies into the project folder still running (main queue).
+    private var pendingWrites = 0
+    /// Quitting now would cut off a take or a copy.
+    var hasPendingWrites: Bool { isRecording || pendingWrites > 0 }
     /// True while the auto-record setup window is open, so adjusting the region doesn't start takes.
     var autoTriggerSuspended = false
 
     private init() {
         engine.onUnexpectedStop = { [weak self] error in self?.handleStreamLoss(error) }
         deckLink.onStateChange = { [weak self] state in self?.handleDeckLinkState(state) }
+        stream.onStateChange = { [weak self] state in self?.handleStreamState(state) }
         detector.pixelBufferProvider = { [weak self] in self?.hub.latestPixelBuffer }
         detector.onTrigger = { [weak self] active in self?.handleAutoTrigger(active) }
         timecode.pixelBufferProvider = { [weak self] in self?.hub.latestPixelBuffer }
@@ -74,12 +84,12 @@ final class AppController: ObservableObject {
         .store(in: &cancellables)
 
         // Stream parameters changed → restart the background capture (not while recording).
-        // (DeckLink delivers the card's own format; these only concern screen capture.)
+        // (DeckLink and network streams deliver their own format; these only concern screen capture.)
         Publishers.CombineLatest3(settings.$frameRate, settings.$recordAudio, settings.$showCursor)
             .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard self?.settings.source?.kind != .decklink else { return }
+                guard self?.settings.source?.isScreenCapture != false else { return }
                 self?.scheduleRestart()
             }
             .store(in: &cancellables)
@@ -91,6 +101,10 @@ final class AppController: ObservableObject {
         healthTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkHealth() }
         timecode.start()
         restartCapture()
+        let unsaved = TempRecordings.unsaved()
+        if !unsaved.isEmpty {
+            lastMessage = "\(unsaved.count) nicht gespeicherte Aufnahme(n) in \(TempRecordings.folder.path) – Endung .tmp in .mov ändern, um sie abzuspielen"
+        }
     }
 
     func select(source: CaptureSource) {
@@ -126,10 +140,20 @@ final class AppController: ObservableObject {
         retryTimer = nil
         guard let source = settings.source else {
             deckLink.stop()
+            stream.stop()
             stopScreenCapture()
             captureState = .noSource
             return
         }
+        if source.kind == .teradek {
+            stopScreenCapture()
+            deckLink.stop()
+            stream.start(address: source.streamURL ?? "")
+            handleStreamState(stream.state)
+            detector.start()
+            return
+        }
+        stream.stop()
         if source.kind == .decklink {
             stopScreenCapture()
             deckLink.start(deviceID: source.deckLinkID)
@@ -229,6 +253,42 @@ final class AppController: ObservableObject {
         }
     }
 
+    // MARK: Teradek network stream
+
+    /// Connects to a Teradek encoder's stream (encoder IP or stream URL, see `StreamAddress`) and remembers the address.
+    func connectStream(_ raw: String, name: String? = nil) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let address = StreamAddress.parse(text) else {
+            notify("„\(text)“ ist keine gültige Stream-Adresse. Möglich sind die IP des Encoders oder rtsp://…, udp://@:Port, tcp://IP:Port bzw. http://…m3u8.")
+            return
+        }
+        var recent = settings.recentStreamAddresses.filter { $0 != text }
+        recent.insert(text, at: 0)
+        settings.recentStreamAddresses = Array(recent.prefix(8))
+        select(source: .teradek(address: text, name: name ?? address.shortName))
+    }
+
+    func forgetStreamAddress(_ raw: String) {
+        settings.recentStreamAddresses.removeAll { $0 == raw }
+    }
+
+    private func handleStreamState(_ state: TeradekStreamEngine.State) {
+        guard settings.source?.kind == .teradek else { return }
+        switch state {
+        case .idle, .connecting:
+            captureState = .starting
+        case .running:
+            captureState = .running
+        case .waiting(let why):
+            // A recording keeps going through short drops (the recorder holds the last picture);
+            // `checkHealth` ends it if the stream stays away.
+            captureState = .unavailable(why)
+        case .failed(let why, let retrying):
+            if !retrying, isRecording { stopRecording() }
+            captureState = .unavailable(retrying ? why + " – neuer Versuch läuft" : why)
+        }
+    }
+
     /// Once a second: frame rate for the preview, and the watchdog for hardware inputs.
     private func checkHealth() {
         let now = ProcessInfo.processInfo.systemUptime
@@ -247,11 +307,16 @@ final class AppController: ObservableObject {
             if deckLink.state == .running, h.frameAge > 6 {
                 deckLink.forceRestart()
             }
-            // Signal gone for good during a take: close the file instead of recording a frozen picture.
-            if isRecording, h.frameAge > 10 {
-                stopRecording()
-                lastMessage = "Aufnahme beendet – kein Signal mehr"
-            }
+        }
+        if settings.source?.kind == .teradek {
+            h.signalFormat = stream.signalFormat
+            h.reconnects = stream.reconnects
+            h.streamDetails = stream.diagnostics
+        }
+        // Signal gone for good during a take: close the file instead of recording a frozen picture.
+        if settings.source?.kind == .decklink || settings.source?.kind == .teradek, isRecording, h.frameAge > 10 {
+            stopRecording()
+            lastMessage = "Aufnahme beendet – kein Signal mehr"
         }
         if h != health { health = h }
     }
@@ -287,9 +352,9 @@ final class AppController: ObservableObject {
         let s = settings
         let container = s.effectiveContainer
         do {
-            let url = try ClipNaming.tempFolder()
-                .appendingPathComponent("rec-\(UUID().uuidString)")
-                .appendingPathExtension(container.fileExtension)
+            // The temp files of takes stored before are replaced by this one.
+            TempRecordings.removeHandled()
+            let url = try TempRecordings.newFile()
             let rec = Recorder(url: url, config: .init(
                 container: container, codec: s.codec, resolution: s.resolution,
                 frameRate: s.frameRate, bitrateMbps: s.bitrateMbps, audio: s.recordAudio,
@@ -311,12 +376,16 @@ final class AppController: ObservableObject {
         isRecording = false
         timecode.setRecording(false)
         recordingStartedAt = nil
+        pendingWrites += 1
         rec.finish { [weak self] result in
+            defer { self?.pendingWrites -= 1 }
             switch result {
             case .success(let r):
                 self?.handleFinishedClip(r)
             case .failure(let error):
-                self?.notify("Aufnahme fehlgeschlagen: \(error.localizedDescription)")
+                let kept = FileManager.default.fileExists(atPath: rec.url.path)
+                self?.notify("Aufnahme fehlgeschlagen: \(error.localizedDescription)"
+                             + (kept ? "\n\nDas bis dahin Aufgenommene liegt unter \(rec.url.path) – Endung .tmp in .mov ändern, um es abzuspielen." : ""))
             }
         }
     }
@@ -326,27 +395,37 @@ final class AppController: ObservableObject {
             NamingPanelController.shared.enqueue(clip: result)
         } else {
             let name = ClipNaming.next
-            save(clip: result.url, as: name)
+            save(clip: result, as: name)
         }
     }
 
-    /// Called by the naming panel or directly in automatic mode.
-    @discardableResult
-    func save(clip url: URL, as name: ClipName) -> URL? {
-        do {
-            let target = try ClipNaming.store(tempFile: url, as: name)
-            ClipNaming.advance(after: name)
-            lastMessage = "Gespeichert: \(target.lastPathComponent)"
-            ClipIndex.shared.rescanSoon()
-            return target
-        } catch {
-            notify("Datei konnte nicht gespeichert werden (\(error.localizedDescription)). Sie liegt noch unter \(url.path).")
-            return nil
+    /// Called by the naming panel or directly in automatic mode. Copies the take into the project folder in the
+    /// background and checks the copy; the temp file is kept (and marked) until the next recording starts.
+    func save(clip: Recorder.Result, as name: ClipName) {
+        // The counter moves on right away, so the next take already gets the following name.
+        ClipNaming.advance(after: name)
+        lastMessage = "Speichere \(ClipNaming.scheme.relativePath(for: name)) …"
+        pendingWrites += 1
+        storeQueue.async {
+            defer { DispatchQueue.main.async { self.pendingWrites -= 1 } }
+            do {
+                let target = try ClipNaming.store(tempFile: clip.url, as: name, fileExtension: clip.fileExtension)
+                TempRecordings.markStored(clip.url, as: target)
+                DispatchQueue.main.async {
+                    self.lastMessage = "Gespeichert: \(target.lastPathComponent)"
+                    ClipIndex.shared.rescanSoon()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.notify("Datei konnte nicht im Projektordner gespeichert werden (\(error.localizedDescription)). "
+                                + "Die Aufnahme liegt unverändert unter \(clip.url.path) – Endung .tmp in .\(clip.fileExtension) ändern, um sie zu verwenden.")
+                }
+            }
         }
     }
 
     func discard(clip url: URL) {
-        try? FileManager.default.removeItem(at: url)
+        TempRecordings.markDiscarded(url)
         lastMessage = "Clip verworfen"
     }
 
@@ -364,12 +443,14 @@ final class AppController: ObservableObject {
 
     /// Quits, finishing a running recording first.
     func quitSafely() {
-        if isRecording {
-            stopRecording()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NSApp.terminate(nil) }
-        } else {
-            NSApp.terminate(nil)
-        }
+        stopRecording()
+        whenWritesDone { NSApp.terminate(nil) }
+    }
+
+    /// Runs `done` once no take is being finished or copied any more.
+    func whenWritesDone(_ done: @escaping () -> Void) {
+        guard hasPendingWrites else { done(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.whenWritesDone(done) }
     }
 
     // MARK: Messages

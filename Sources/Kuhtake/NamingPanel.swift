@@ -30,7 +30,7 @@ final class NamingPanelController {
         let info = "Clip fertig (\(duration))" + (pending > 0 ? " · \(pending) weitere(r) warten" : "")
         present(title: "Clip benennen", info: info, saveLabel: "Speichern",
                 discard: { AppController.shared.discard(clip: clip.url) }) { name in
-            AppController.shared.save(clip: clip.url, as: name)
+            AppController.shared.save(clip: clip, as: name)
         }
     }
 

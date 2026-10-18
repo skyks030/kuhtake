@@ -115,7 +115,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         // Preview
         menu.addItem(shortcutItem("Vorschau öffnen", .showPreview, #selector(showPreview), image: "rectangle.inset.filled"))
-        menu.addItem(shortcutItem("Source Browser", .sourceBrowser, #selector(showBrowser), image: "rectangle.split.3x1"))
+        menu.addItem(shortcutItem("File Browser", .sourceBrowser, #selector(showBrowser), image: "rectangle.split.3x1"))
         menu.addItem(.separator())
 
         // Source
@@ -138,6 +138,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let vuer = item("Teradek Vuer HDR", #selector(chooseVuer), image: "antenna.radiowaves.left.and.right")
         vuer.state = settings.source?.kind == .vuer ? .on : .off
         menu.addItem(vuer)
+        let streamMenu = NSMenu()
+        for a in settings.recentStreamAddresses {
+            let i = NSMenuItem(title: StreamAddress.parse(a)?.displayName ?? a, action: #selector(chooseStream(_:)), keyEquivalent: "")
+            i.target = self
+            i.representedObject = a
+            i.state = settings.source?.kind == .teradek && settings.source?.streamURL == a ? .on : .off
+            streamMenu.addItem(i)
+        }
+        if !settings.recentStreamAddresses.isEmpty { streamMenu.addItem(.separator()) }
+        streamMenu.addItem(item("Adresse eingeben …", #selector(chooseSource)))
+        let streamItem = item("Teradek-Netzwerkstream", #selector(noop), image: "network")
+        streamItem.state = settings.source?.kind == .teradek ? .on : .off
+        streamItem.submenu = streamMenu
+        menu.addItem(streamItem)
         menu.addItem(shortcutItem("Fenster oder Bildschirm wählen …", .chooseSource, #selector(chooseSource), image: "macwindow.on.rectangle"))
         if settings.source?.isScreenCapture == true {
             menu.addItem(item("Bildausschnitt festlegen …", #selector(configureCrop), image: "crop"))
@@ -241,6 +255,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func configureTimecode() { TimecodeWindow.show() }
     @objc private func configureCrop() { CropWindow.show() }
     @objc private func chooseVuer() { controller.select(source: .vuer()) }
+    @objc private func chooseStream(_ sender: NSMenuItem) {
+        guard let address = sender.representedObject as? String else { return }
+        controller.connectStream(address)
+    }
     @objc private func editNaming() { NamingPanelController.shared.editNext() }
     @objc private func showFormat() { FormatWindow.show() }
     @objc private func checkUpdates() { Updater.shared.check(userInitiated: true) }

@@ -189,7 +189,7 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
                 throw running ? CaptureError.vuerNoWindow(appName) : CaptureError.vuerNotRunning(appName)
             }
             return SCContentFilter(desktopIndependentWindow: window)
-        case .decklink:
+        case .decklink, .teradek:
             throw CaptureError.sourceNotFound(source.label)
         }
     }

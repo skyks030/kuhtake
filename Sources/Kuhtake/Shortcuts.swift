@@ -137,7 +137,7 @@ enum ShortcutAction: String, CaseIterable, Codable, CodingKeyRepresentable, Iden
         case .stopRecording: return "Aufnahme stoppen"
         case .toggleAutoRecord: return "Auto-Aufnahme ein / aus"
         case .showPreview: return "Vorschaufenster zeigen"
-        case .sourceBrowser: return "Source Browser öffnen"
+        case .sourceBrowser: return "File Browser öffnen"
         case .liveView: return "Zurück zum Live-Bild"
         case .chooseSource: return "Quelle wählen …"
         case .nameNextClip: return "Szene / Shot / Take festlegen …"

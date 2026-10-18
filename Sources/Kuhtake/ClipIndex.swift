@@ -125,8 +125,8 @@ final class ClipIndex: ObservableObject {
             guard let info else { return }
             let index = Unmanaged<ClipIndex>.fromOpaque(info).takeUnretainedValue()
             let list = Unmanaged<CFArray>.fromOpaque(paths).takeUnretainedValue() as? [String] ?? []
-            // Writes into the temp folder during a recording are not interesting.
-            if !list.isEmpty, list.allSatisfy({ $0.contains("/.kuhtake-tmp") }) { return }
+            // The hidden partial copy of a take being stored is not interesting, only its final rename.
+            if !list.isEmpty, list.allSatisfy({ ($0 as NSString).lastPathComponent.hasPrefix(".") }) { return }
             DispatchQueue.main.async { index.rescanSoon() }
         }
         let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)

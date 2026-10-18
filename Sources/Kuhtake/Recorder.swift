@@ -14,6 +14,8 @@ enum RecorderError: LocalizedError {
 
 /// Writes captured frames into a movie file with a constant frame rate.
 /// Frames are re-timed onto the frame grid; short gaps (static content) are filled with the previous frame.
+/// The file is written as a fragmented movie: if the take is cut off (crash, power loss), everything up to the last
+/// fragment still plays. A normal finish turns it back into a regular movie.
 final class Recorder: CaptureSink {
     struct Config {
         var container: ContainerFormat
@@ -30,6 +32,8 @@ final class Recorder: CaptureSink {
     struct Result {
         let url: URL
         let duration: TimeInterval
+        /// What the file really is (`url` may carry a temporary extension).
+        let fileExtension: String
     }
 
     let url: URL
@@ -127,6 +131,7 @@ final class Recorder: CaptureSink {
             outSize = CGSize(width: sourceWidth & ~1, height: sourceHeight & ~1)
         }
         let w = try AVAssetWriter(outputURL: url, fileType: cfg.container.fileType)
+        w.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
 
         var videoSettings: [String: Any] = [
             AVVideoCodecKey: cfg.codec.avCodec,
@@ -271,8 +276,11 @@ final class Recorder: CaptureSink {
         queue.async {
             self.finishing = true
             guard let writer = self.writer, writer.status == .writing, self.lastIndex >= 0 else {
-                self.writer?.cancelWriting()
-                try? FileManager.default.removeItem(at: self.url)
+                // Nothing recorded: nothing to keep. A take that failed midway stays for rescue (see `TempRecordings`).
+                if self.lastIndex < 0 {
+                    self.writer?.cancelWriting()
+                    try? FileManager.default.removeItem(at: self.url)
+                }
                 let error = self.failure ?? self.writer?.error ?? RecorderError.noFrames
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
@@ -285,7 +293,7 @@ final class Recorder: CaptureSink {
             writer.endSession(atSourceTime: end)
             writer.finishWriting {
                 let result: Swift.Result<Result, Error> = writer.status == .completed
-                    ? .success(Result(url: self.url, duration: duration))
+                    ? .success(Result(url: self.url, duration: duration, fileExtension: self.cfg.container.fileExtension))
                     : .failure(writer.error ?? RecorderError.writerFailed("finishWriting"))
                 self.lastBuffer = nil
                 DispatchQueue.main.async { completion(result) }

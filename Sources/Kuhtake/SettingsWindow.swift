@@ -195,6 +195,7 @@ private struct SourceSettingsView: View {
             }
 
             VuerSettingsSection()
+            StreamSettingsSection()
 
             Section("Bildschirm & Fenster") {
                 HStack {
@@ -284,6 +285,61 @@ private struct AutoSettingsView: View {
 }
 
 // MARK: - Teradek
+
+private struct StreamSettingsSection: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var controller = AppController.shared
+    @State private var copied = false
+
+    var body: some View {
+        Section {
+            StreamAddressField()
+            if settings.source?.kind == .teradek {
+                LabeledContent("Neu verbunden", value: "\(controller.health.reconnects)×")
+                ForEach(controller.health.streamDetails, id: \.self) { line in
+                    Text(line).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
+            if !settings.recentStreamAddresses.isEmpty {
+                ForEach(settings.recentStreamAddresses, id: \.self) { a in
+                    let active = settings.source?.kind == .teradek && settings.source?.streamURL == a
+                    HStack {
+                        Image(systemName: "network").foregroundStyle(active ? Color.accentColor : .secondary)
+                        Text(StreamAddress.parse(a)?.displayName ?? a).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        if active {
+                            Text("Aktiv").foregroundStyle(.secondary)
+                        } else {
+                            Button("Verwenden") { controller.connectStream(a) }
+                            Button {
+                                controller.forgetStreamAddress(a)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Aus der Liste entfernen")
+                        }
+                    }
+                }
+            }
+            HStack {
+                Button(copied ? "Kopiert ✓" : "Diagnose kopieren") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(controller.stream.diagnosisReport, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                }
+                Button("Protokoll leeren") { StreamLog.shared.clear() }
+            }
+        } header: {
+            Text("Teradek-Netzwerkstream")
+        } footer: {
+            Text("Für Encoder mit RTSP-, MPEG-TS- oder HLS-Ausgang (Cube, Bond, Prism …). H.264/HEVC und AAC werden direkt empfangen und dekodiert; reißt die Verbindung ab, verbindet Kuhtake sich alle paar Sekunden neu. "
+                 + "„Diagnose kopieren“ legt das komplette Protokoll (RTSP-Austausch, Pakete, Decoder) in die Zwischenablage.\n" + streamAddressHelp)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
 
 private struct VuerSettingsSection: View {
     @ObservedObject private var settings = AppSettings.shared
@@ -394,7 +450,7 @@ private struct NamingSettingsView: View {
             } header: {
                 Text("Bezeichnungen")
             } footer: {
-                Text("Steht vor der Szene, dem Shot und dem Take im Ordner- und Dateinamen. Der Source Browser findet und sortiert alle Clips, die diese Bezeichnungen tragen – jeweils gefolgt von einer ein- bis dreistelligen Zahl (z. B. SH3, SH03, SH003). Leer lassen für reine Zahlen. Den nächsten Clip stellst du im Hauptfenster oben rechts ein.")
+                Text("Steht vor der Szene, dem Shot und dem Take im Ordner- und Dateinamen. Der File Browser findet und sortiert alle Clips, die diese Bezeichnungen tragen – jeweils gefolgt von einer ein- bis dreistelligen Zahl (z. B. SH3, SH03, SH003). Leer lassen für reine Zahlen. Den nächsten Clip stellst du im Hauptfenster oben rechts ein.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Namensschema") {

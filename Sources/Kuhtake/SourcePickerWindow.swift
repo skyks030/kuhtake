@@ -111,6 +111,7 @@ struct SourcePickerView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     deckLinkSection
                     VuerPickerSection(columns: columns)
+                    StreamPickerSection()
                     if !hasScreenPermission {
                         HStack {
                             Label("Für Bildschirme und Fenster braucht Kuhtake die Bildschirmaufnahme-Berechtigung.", systemImage: "lock.shield")
@@ -316,5 +317,105 @@ private struct VuerPickerSection: View {
         }
         .font(.caption).foregroundStyle(.secondary)
         .onAppear { browser.start() }
+    }
+}
+
+// MARK: - Teradek network stream
+
+/// Encoder address or stream URL, with the recent addresses, encoders found on the network and the test encoder.
+struct StreamAddressField: View {
+    var onConnect: () -> Void = {}
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var browser = TeradekBrowser.shared
+    @State private var text = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("IP des Encoders oder rtsp://…, udp://@:5000, http://…m3u8", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(connect)
+            Menu {
+                if !settings.recentStreamAddresses.isEmpty {
+                    Section("Zuletzt verwendet") {
+                        ForEach(settings.recentStreamAddresses, id: \.self) { a in
+                            Button(StreamAddress.parse(a)?.displayName ?? a) { text = a; connect() }
+                        }
+                    }
+                }
+                let hosts = browser.encoders.compactMap { e in e.host.map { (e.name, $0.hasSuffix(".") ? String($0.dropLast()) : $0) } }
+                if !hosts.isEmpty {
+                    Section("Im Netzwerk") {
+                        ForEach(hosts, id: \.1) { name, host in
+                            Button("\(name) (\(host))") {
+                                AppController.shared.connectStream(host, name: name)
+                                onConnect()
+                            }
+                        }
+                    }
+                }
+                Section("Test-Encoder (ohne Hardware)") {
+                    ForEach(StreamAddress.Mode.allCases) { m in
+                        Button(m.label) { text = m.address; connect() }
+                    }
+                }
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Zuletzt verwendet, im Netzwerk gefunden, Test-Encoder")
+            Button("Verbinden", action: connect)
+                .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .onAppear {
+            browser.start()
+            if text.isEmpty, settings.source?.kind == .teradek { text = settings.source?.streamURL ?? "" }
+        }
+    }
+
+    private func connect() {
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        AppController.shared.connectStream(text)
+        onConnect()
+    }
+}
+
+/// How to reach an encoder, for the footers.
+let streamAddressHelp = """
+Encoder-IP: Kuhtake sucht den RTSP-Stream selbst (Ports 554/8554). Mit Passwort: benutzer:passwort@IP.
+rtsp://IP/stream1 · rtspu://… (RTP über UDP) · udp://@:5000 (MPEG-TS an diesen Mac, auch Multicast udp://239.x.x.x:5000) · \
+tcp://IP:Port (MPEG-TS) · http://…/index.m3u8 (HLS, nur Bild).
+"""
+
+private struct StreamPickerSection: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var controller = AppController.shared
+
+    var body: some View {
+        Text("Teradek-Netzwerkstream").font(.title3.bold())
+        VStack(alignment: .leading, spacing: 8) {
+            StreamAddressField { WindowPresenter.shared.close(id: "source") }
+            if settings.source?.kind == .teradek {
+                HStack(spacing: 6) {
+                    Circle().fill(controller.captureState == .running ? Color.green : .orange).frame(width: 8, height: 8)
+                    Text(settings.source?.label ?? "")
+                    Text("·")
+                    Text(controller.captureState == .running ? (controller.health.signalFormat ?? "Verbunden") : streamStatus)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+            }
+            Text("Für Encoder mit RTSP-, MPEG-TS- oder HLS-Ausgang (z. B. Cube, Bond, Prism) – Bild und Ton werden direkt empfangen und dekodiert, ohne Umweg über ein App-Fenster. "
+                 + "Serv Pro & Serv 4K senden nur an VUER: dafür die Quelle oben verwenden.\n" + streamAddressHelp)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var streamStatus: String {
+        switch controller.captureState {
+        case .unavailable(let why): return why
+        default: return "Verbinde …"
+        }
     }
 }

@@ -73,6 +73,7 @@ enum MainMenu {
         let m = NSMenu(title: "Darstellung")
         m.addItem(action(.liveView))
         m.addItem(action(.sourceBrowser))
+        m.addItem(custom("Take suchen …  (⇧Leertaste)", #selector(MenuTarget.quickSearch)))
         m.addItem(.separator())
         m.addItem(action(.showPreview))
         return m
@@ -125,6 +126,7 @@ private final class MenuTarget: NSObject, NSMenuItemValidation {
     @objc func configureAuto() { AutoRecordWindow.show() }
     @objc func configureTimecode() { TimecodeWindow.show() }
     @objc func configureCrop() { CropWindow.show() }
+    @MainActor @objc func quickSearch() { QuickSearch.open() }
     @objc func quit() { AppController.shared.quitSafely() }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {

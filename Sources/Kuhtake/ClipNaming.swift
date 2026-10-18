@@ -325,9 +325,27 @@ enum ClipNaming {
         s.take = name.take
     }
 
-    /// Moves a finished temp recording to its place according to the naming scheme.
-    static func store(tempFile: URL, as name: ClipName) throws -> URL {
-        try place(tempFile, at: scheme.relativePath(for: name))
+    /// Copies a finished temp recording to its place according to the naming scheme. The copy is written under a
+    /// hidden name next to its target and only gets its real name once `TempRecordings.verify` is happy with it, so a
+    /// half-copied file never shows up as a take. The temp file itself stays where it is. Blocks: background queue.
+    static func store(tempFile: URL, as name: ClipName, fileExtension ext: String,
+                      into root: URL = AppSettings.shared.workingFolder) throws -> URL {
+        let fm = FileManager.default
+        let base = root.appendingPathComponent(scheme.relativePath(for: name))
+        let folder = base.deletingLastPathComponent()
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let target = freeTarget(in: folder, stem: base.lastPathComponent, ext: ext)
+        let partial = folder.appendingPathComponent("." + target.lastPathComponent)
+        try? fm.removeItem(at: partial)
+        do {
+            try fm.copyItem(at: tempFile, to: partial)
+            try TempRecordings.verify(copy: partial, of: tempFile)
+            try fm.moveItem(at: partial, to: target)
+        } catch {
+            try? fm.removeItem(at: partial)
+            throw error
+        }
+        return target
     }
 
     /// Renames / moves an existing take (source browser). Keeps the file's date for a `{datum}` placeholder.
@@ -353,15 +371,20 @@ enum ClipNaming {
         let base = AppSettings.shared.workingFolder.appendingPathComponent(relativePath)
         let folder = base.deletingLastPathComponent()
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        let ext = file.pathExtension
-        let stem = base.lastPathComponent
+        let target = freeTarget(in: folder, stem: base.lastPathComponent, ext: file.pathExtension)
+        try fm.moveItem(at: file, to: target)
+        return target
+    }
+
+    /// `stem.ext`, or `stem_2.ext` … if that is taken.
+    private static func freeTarget(in folder: URL, stem: String, ext: String) -> URL {
+        let fm = FileManager.default
         var target = folder.appendingPathComponent(stem).appendingPathExtension(ext)
         var n = 2
         while fm.fileExists(atPath: target.path) {
             target = folder.appendingPathComponent("\(stem)_\(n)").appendingPathExtension(ext)
             n += 1
         }
-        try fm.moveItem(at: file, to: target)
         return target
     }
 
@@ -376,19 +399,5 @@ enum ClipNaming {
             try? fm.removeItem(at: current)
             current = current.deletingLastPathComponent()
         }
-    }
-
-    static func tempFolder() throws -> URL {
-        let fm = FileManager.default
-        var folder = AppSettings.shared.workingFolder.appendingPathComponent(".kuhtake-tmp", isDirectory: true)
-        do {
-            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        } catch {
-            // Working folder unavailable (e.g. unplugged drive) – fall back to ~/Movies.
-            folder = fm.urls(for: .moviesDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("Kuhtake/.kuhtake-tmp", isDirectory: true)
-            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        }
-        return folder
     }
 }

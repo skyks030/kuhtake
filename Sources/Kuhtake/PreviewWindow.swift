@@ -3,7 +3,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// The main window: live picture of the current input, or (⌘F) the source browser with two playback monitors.
+/// The main window: live picture of the current input, or (⌘F) the file browser with two playback monitors.
 enum PreviewWindow {
     static let id = "preview"
 
@@ -34,6 +34,8 @@ final class PreviewModel: ObservableObject {
     enum Mode { case live, browser }
 
     @Published private(set) var mode: Mode = .live
+    /// The file browser stays alive once opened (hidden in live mode), so folded folders and the scroll position survive.
+    @Published private(set) var browserLoaded = false
     @Published var showSecondMonitor = false
     @Published var selection: TakeFile.ID?
     /// Take waiting for the "move to trash?" confirmation.
@@ -44,6 +46,8 @@ final class PreviewModel: ObservableObject {
 
     private var keyMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
+    /// Newest take when the browser was last looked at – a newer one gets selected on return, otherwise everything stays put.
+    private var latestSeenInBrowser: TakeFile?
 
     private init() {
         // Always present the newest take: select it, and show it on monitor 1 unless something else is being looked at.
@@ -52,6 +56,7 @@ final class PreviewModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] latest in
                 guard let self, let latest, self.mode == .browser else { return }
+                self.latestSeenInBrowser = latest
                 self.selection = latest.id
                 if !self.monitor1.isLoaded || (!self.monitor1.isPlaying && self.monitor1.take?.date ?? .distantPast < latest.date
                                                && self.monitor1.take.map(self.isLastTakeOfShot) != false) {
@@ -80,16 +85,35 @@ final class PreviewModel: ObservableObject {
         monitor1.pause()
         monitor2.pause()
         removeKeyMonitor()
+        // A new window builds a new browser.
+        browserLoaded = false
     }
 
     private func enterBrowser() {
+        browserLoaded = true
         ClipIndex.shared.rescanSoon(delay: 0)
-        if let latest = ClipIndex.shared.latest {
-            selection = latest.id
+        let index = ClipIndex.shared
+        if let latest = index.latest {
+            // Only jump when something new was recorded meanwhile (or nothing is selected) – else keep the list as it was.
+            if latest != latestSeenInBrowser || selection == nil || index.take(id: selection!) == nil {
+                selection = latest.id
+            }
+            latestSeenInBrowser = latest
             if !monitor1.isLoaded { monitor1.load(latest) }
         }
         installKeyMonitor()
         ensureRoomForBrowser()
+    }
+
+    /// Quick search: show the take in the browser, selected (and its folders opened).
+    func reveal(_ take: TakeFile, loadInto monitor: Int? = nil) {
+        if AppSettings.shared.browserLastTakesOnly, !isLastTakeOfShot(take) {
+            AppSettings.shared.browserLastTakesOnly = false
+        }
+        AppSettings.shared.browserCollapsed.subtract([take.scene, "\(take.scene)|\(take.shot)"])
+        PreviewWindow.show(mode: .browser)
+        selection = take.id
+        if let monitor { load(into: monitor) }
     }
 
     /// Three panes need some width.
@@ -130,14 +154,29 @@ final class PreviewModel: ObservableObject {
         }
     }
 
+    private var activeMonitors: [MonitorPlayer] { [monitor1] + (showSecondMonitor ? [monitor2] : []) }
+
     /// Space: both monitors start and stop together.
     func togglePlayBoth() {
-        let active = [monitor1] + (showSecondMonitor ? [monitor2] : [])
+        let active = activeMonitors
         if active.contains(where: \.isPlaying) {
             active.forEach { $0.pause() }
         } else {
             active.filter(\.isLoaded).forEach { $0.play() }
         }
+    }
+
+    /// J / L: play backwards / forwards; pressed again in the same direction 2×, 4×, 8×. Both monitors move together.
+    func shuttle(forward: Bool) {
+        let loaded = activeMonitors.filter(\.isLoaded)
+        guard let lead = loaded.first else { NSSound.beep(); return }
+        let rate = MonitorPlayer.nextShuttleRate(after: lead.isPlaying ? lead.shuttleRate : 0, forward: forward)
+        loaded.forEach { $0.setShuttle(rate: rate) }
+    }
+
+    /// K: stop.
+    func shuttleStop() {
+        activeMonitors.forEach { $0.pause() }
     }
 
     func closeSecondMonitor() {
@@ -161,11 +200,15 @@ final class PreviewModel: ObservableObject {
                 self.deleteRequest = take
                 return nil
             }
-            guard mods.isEmpty else { return event }
+            // ⇧Space belongs to the quick search.
+            guard mods.isEmpty, !event.modifierFlags.contains(.shift) else { return event }
             switch Int(event.keyCode) {
             case 18, 83: self.load(into: 1); return nil    // 1, keypad 1
             case 19, 84: self.load(into: 2); return nil    // 2, keypad 2
             case 49: self.togglePlayBoth(); return nil     // space
+            case 38: self.shuttle(forward: false); return nil  // J
+            case 40: self.shuttleStop(); return nil            // K
+            case 37: self.shuttle(forward: true); return nil   // L
             default: return event
             }
         }
@@ -187,10 +230,16 @@ struct PreviewRootView: View {
         VStack(spacing: 0) {
             PreviewTopBar()
             Divider()
-            Group {
-                switch model.mode {
-                case .live: LivePane()
-                case .browser: SourceBrowserView()
+            ZStack {
+                if model.browserLoaded {
+                    let visible = model.mode == .browser
+                    SourceBrowserView()
+                        .opacity(visible ? 1 : 0)
+                        .allowsHitTesting(visible)
+                        .accessibilityHidden(!visible)
+                }
+                if model.mode == .live {
+                    LivePane()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -234,24 +283,19 @@ private struct PreviewTopBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Picker("", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
-                Text("Source Browser").tag(PreviewModel.Mode.browser)
+                Text("File Browser").tag(PreviewModel.Mode.browser)
                 Text("Live").tag(PreviewModel.Mode.live)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            .help("Source Browser (\(shortcutText(.sourceBrowser))) · Live-Bild (\(shortcutText(.liveView)))")
+            .help("File Browser (\(shortcutText(.sourceBrowser))) · Live-Bild (\(shortcutText(.liveView))) · Take suchen (⇧Leertaste)")
 
             HStack(spacing: 12) {
-                if settings.autoRecordEnabled {
-                    Text("AUTO").font(.caption.weight(.heavy)).foregroundStyle(.orange)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().strokeBorder(Color.orange.opacity(0.7)))
-                        .help("Auto-Aufnahme ist aktiv")
-                        .fixedSize()
-                }
                 NextClipButton()
                     .layoutPriority(-1)
+                AutoRecordToggle()
+                    .fixedSize()
                 RecordButton()
                     .fixedSize()
             }
@@ -267,6 +311,7 @@ private struct PreviewTopBar: View {
         case .display: return "display"
         case .window: return "macwindow"
         case .vuer: return "antenna.radiowaves.left.and.right"
+        case .teradek: return "network"
         case nil: return "video.slash"
         }
     }
@@ -412,12 +457,54 @@ struct SourceMenuItems: View {
                     Text("Vuer HDR (App-Fenster)")
                 }
             }
+            ForEach(settings.recentStreamAddresses, id: \.self) { a in
+                Button {
+                    AppController.shared.connectStream(a)
+                } label: {
+                    let title = "Stream: " + (StreamAddress.parse(a)?.displayName ?? a)
+                    if settings.source?.kind == .teradek && settings.source?.streamURL == a {
+                        Label(title, systemImage: "checkmark")
+                    } else {
+                        Text(title)
+                    }
+                }
+            }
+            Button("Netzwerkstream verbinden …") { SourcePickerWindow.show() }
         }
         Divider()
         Button("Fenster oder Bildschirm wählen …") { SourcePickerWindow.show() }
         if settings.source?.isScreenCapture == true {
             Button("Bildausschnitt festlegen …") { CropWindow.show() }
         }
+    }
+}
+
+/// Switches auto recording on and off right next to the record button.
+struct AutoRecordToggle: View {
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        let on = settings.autoRecordEnabled
+        Button {
+            AppController.shared.setAutoRecord(!on)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "wand.and.rays")
+                Text("AUTO").font(.caption.weight(.heavy))
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .foregroundStyle(on ? Color.white : .secondary)
+            .background(Capsule().fill(on ? Color.orange : Color.primary.opacity(0.08)))
+            .overlay(Capsule().strokeBorder(on ? Color.clear : Color.secondary.opacity(0.35)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Auto-Aufnahme einrichten …") { AutoRecordWindow.show() }
+        }
+        .help((on ? "Auto-Aufnahme ist aktiv – klicken zum Ausschalten" : "Auto-Aufnahme einschalten")
+              + " (\(shortcutText(.toggleAutoRecord))) · Rechtsklick: einrichten")
     }
 }
 

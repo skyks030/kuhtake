@@ -12,10 +12,16 @@ final class MonitorPlayer: ObservableObject {
     @Published private(set) var duration: Double = 0
     @Published private(set) var fps: Double = 25
     @Published private(set) var isPlaying = false
+    /// Current playback speed, negative = backwards (0 while paused).
+    @Published private(set) var shuttleRate: Float = 0
     @Published var isMuted = false { didSet { player.isMuted = isMuted } }
 
     private var timeObserver: Any?
     private var statusObservation: NSKeyValueObservation?
+    private var rateObservation: NSKeyValueObservation?
+    /// Speeds the player can't do itself (some files can't play backwards) are done by stepping through the clip.
+    private var emulation: Timer?
+    private var emulatedRate: Float = 0
     private var endObserver: NSObjectProtocol?
     // Scrubbing: only one precise seek at a time, always to the newest target.
     private var isSeeking = false
@@ -34,8 +40,78 @@ final class MonitorPlayer: ObservableObject {
         }
         statusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
             let playing = p.timeControlStatus != .paused
-            DispatchQueue.main.async { self?.isPlaying = playing }
+            DispatchQueue.main.async {
+                guard let self, self.emulation == nil else { return }
+                self.isPlaying = playing
+            }
         }
+        rateObservation = player.observe(\.rate, options: [.new]) { [weak self] p, _ in
+            let rate = p.rate
+            DispatchQueue.main.async {
+                guard let self, self.emulation == nil else { return }
+                self.shuttleRate = rate
+            }
+        }
+    }
+
+    /// J / L steps: 1×, 2×, 4×, 8× in the pressed direction; the other direction starts again at 1×.
+    static let shuttleSteps: [Float] = [1, 2, 4, 8]
+
+    static func nextShuttleRate(after current: Float, forward: Bool) -> Float {
+        let sign: Float = forward ? 1 : -1
+        guard current != 0, (current > 0) == forward else { return sign }
+        let next = shuttleSteps.first { $0 > abs(current) + 0.01 } ?? shuttleSteps.last!
+        return sign * next
+    }
+
+    func setShuttle(rate: Float) {
+        guard isLoaded else { return }
+        stopEmulation()
+        if rate > 0, isAtEnd { seek(to: 0) }
+        if rate < 0, time <= 0.5 / fps { seek(to: duration) }
+        let item = player.currentItem
+        let supported: Bool
+        switch rate {
+        case 1: supported = true
+        case let r where r > 1: supported = item?.canPlayFastForward ?? false
+        case -1: supported = item?.canPlayReverse ?? false
+        case let r where r < -1: supported = item?.canPlayFastReverse ?? false
+        default: supported = false
+        }
+        if supported {
+            player.rate = rate
+        } else {
+            startEmulation(rate: rate)
+        }
+    }
+
+    private func startEmulation(rate: Float) {
+        player.pause()
+        emulatedRate = rate
+        isPlaying = true
+        shuttleRate = rate
+        let tick = 1.0 / 30
+        emulation = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let next = self.time + Double(self.emulatedRate) * tick
+                if next <= 0 || next >= self.duration {
+                    self.seek(to: min(max(0, next), self.duration))
+                    self.stopEmulation()
+                } else {
+                    self.seek(to: next)
+                }
+            }
+        }
+    }
+
+    private func stopEmulation() {
+        guard let emulation else { return }
+        emulation.invalidate()
+        self.emulation = nil
+        emulatedRate = 0
+        isPlaying = false
+        shuttleRate = 0
     }
 
     var isLoaded: Bool { take != nil }
@@ -58,6 +134,7 @@ final class MonitorPlayer: ObservableObject {
     }
 
     func unload() {
+        stopEmulation()
         player.pause()
         player.replaceCurrentItem(with: nil)
         take = nil
@@ -67,11 +144,15 @@ final class MonitorPlayer: ObservableObject {
 
     func play() {
         guard isLoaded else { return }
+        stopEmulation()
         if isAtEnd { seek(to: 0) }
-        player.play()
+        player.rate = 1
     }
 
-    func pause() { player.pause() }
+    func pause() {
+        stopEmulation()
+        player.pause()
+    }
 
     func togglePlay() { isPlaying ? pause() : play() }
 
@@ -170,10 +251,19 @@ struct MonitorView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            ZStack {
+            ZStack(alignment: .bottomLeading) {
                 Color.black
                 if monitor.isLoaded {
                     PlayerSurface(player: monitor.player)
+                    if let speed = speedLabel {
+                        Text(speed)
+                            .font(.system(.callout, design: .rounded).weight(.heavy).monospacedDigit())
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Capsule().fill(MonitorColor.color(number)))
+                            .padding(10)
+                            .transition(.opacity)
+                    }
                 } else {
                     VStack(spacing: 10) {
                         Text("\(number)")
@@ -186,18 +276,28 @@ struct MonitorView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.easeOut(duration: 0.12), value: speedLabel)
             transport
         }
         .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(Rectangle().strokeBorder(MonitorColor.color(number).opacity(0.75), lineWidth: 2.5))
+    }
+
+    /// "2×", "◀ 1×" … while shuttling (nothing at normal speed).
+    private var speedLabel: String? {
+        let r = monitor.shuttleRate
+        guard monitor.isPlaying, r != 0, r != 1 else { return nil }
+        let value = abs(r) == abs(r).rounded() ? String(Int(abs(r))) : String(format: "%.1f", abs(r))
+        return (r < 0 ? "◀ " : "▶ ") + value + "×"
     }
 
     private var header: some View {
         HStack(spacing: 8) {
             Text("\(number)")
                 .font(.caption.weight(.heavy))
-                .foregroundStyle(.white)
+                .foregroundStyle(number == 2 ? Color.black : .white)
                 .frame(width: 18, height: 18)
-                .background(RoundedRectangle(cornerRadius: 4).fill(number == 1 ? Color.accentColor : Color.orange))
+                .background(RoundedRectangle(cornerRadius: 4).fill(MonitorColor.color(number)))
             if let take = monitor.take {
                 Text(take.name).font(.callout.weight(.medium)).lineLimit(1)
                 if isLatest {
@@ -239,7 +339,7 @@ struct MonitorView: View {
                 Button { monitor.togglePlay() } label: {
                     Image(systemName: monitor.isPlaying ? "pause.fill" : "play.fill").frame(width: 16)
                 }
-                .help("Abspielen / Pause (Leertaste: beide Monitore)")
+                .help("Abspielen / Pause (Leertaste: beide Monitore · J / K / L: rückwärts, Stopp, vorwärts – mehrmals für 2×, 4×, 8×)")
                 Button { monitor.step(frames: 1) } label: { Image(systemName: "forward.frame.fill") }
                     .help("Ein Bild vor")
                 Spacer()
