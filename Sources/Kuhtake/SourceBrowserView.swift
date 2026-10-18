@@ -69,6 +69,9 @@ private struct TakeSidebar: View {
     @ObservedObject private var index = ClipIndex.shared
     @ObservedObject private var settings = AppSettings.shared
     @State private var renaming: TakeFile?
+    /// The takes loaded in the monitors. Followed separately: the monitors are not part of the model's own changes,
+    /// and observing them as a whole would redraw the list on every playhead tick.
+    @State private var monitorTakes: (TakeFile?, TakeFile?) = (nil, nil)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -85,8 +88,8 @@ private struct TakeSidebar: View {
                                     DisclosureGroup(isExpanded: expanded(shot.id)) {
                                         ForEach(visibleTakes(of: shot)) { take in
                                             TakeRow(take: take, isLast: take == shot.lastTake, isNewest: take == index.latest,
-                                                    onMonitor1: model.monitor1.take == take,
-                                                    onMonitor2: model.showSecondMonitor && model.monitor2.take == take)
+                                                    onMonitor1: monitorTakes.0 == take,
+                                                    onMonitor2: model.showSecondMonitor && monitorTakes.1 == take)
                                                 .listRowInsets(EdgeInsets(top: 1, leading: 4, bottom: 1, trailing: 4))
                                                 .tag(take.id)
                                                 .id(take.id)
@@ -124,6 +127,8 @@ private struct TakeSidebar: View {
             footer
         }
         .background(Color(nsColor: .controlBackgroundColor))
+        .onReceive(model.monitor1.$take.removeDuplicates()) { monitorTakes.0 = $0 }
+        .onReceive(model.monitor2.$take.removeDuplicates()) { monitorTakes.1 = $0 }
         .sheet(item: $renaming) { take in
             RenameTakeView(take: take) { name in
                 model.rename(take, to: name)
