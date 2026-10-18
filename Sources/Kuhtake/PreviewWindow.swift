@@ -352,7 +352,16 @@ private struct NextClipButton: View {
             editing.toggle()
         } label: {
             VStack(alignment: .trailing, spacing: 1) {
-                Text("NÄCHSTER CLIP").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    if !settings.showNamingPrompt {
+                        Text("AUTO").font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 3).padding(.vertical, 0.5)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(Color.accentColor.opacity(0.25)))
+                            .foregroundStyle(Color.accentColor)
+                            .help("Auto-Naming: kein Dialog nach dem Clip, der Take zählt automatisch hoch")
+                    }
+                    Text("NÄCHSTER CLIP").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                }
                 HStack(spacing: 4) {
                     Text(ClipNaming.nextFileName)
                         .font(.system(.caption, design: .monospaced))
@@ -409,6 +418,17 @@ private struct NextClipEditor: View {
                 Image(systemName: "doc").foregroundStyle(.secondary)
                 Text(ClipNaming.previewPath(for: ClipNaming.next))
                     .font(.caption.monospaced()).textSelection(.enabled)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 3) {
+                // Same setting as „Benennung nach jedem Clip abfragen“, the other way round.
+                Toggle("Auto-Naming", isOn: Binding(get: { !settings.showNamingPrompt }, set: { settings.showNamingPrompt = !$0 }))
+                    .toggleStyle(.switch)
+                Text(settings.showNamingPrompt
+                     ? "Nach jedem Clip fragt ein Dialog nach Szene, Shot und Take."
+                     : "Kein Dialog: Jeder Clip wird sofort gespeichert, der Take zählt automatisch hoch.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Button("Namensschema …") { SettingsWindow.show(tab: .naming) }
                 .buttonStyle(.link).font(.caption)
